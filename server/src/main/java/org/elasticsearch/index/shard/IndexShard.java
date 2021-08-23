@@ -2423,6 +2423,14 @@ public class IndexShard extends AbstractIndexShardComponent implements IndicesCl
     }
 
     /**
+     * 为了在没有translog的情况下 使副本节点的localCheckpoint 保持和globalCheckpoint同步
+     * @param globalCheckpoint 从 primary shard 获取
+     */
+    public void markNoTranslogSync(long globalCheckpoint) {
+        getEngine().markSeqNoAsCompleted(globalCheckpoint);
+    }
+
+    /**
      * Returns the persisted local checkpoint for the shard.
      *
      * @return the local checkpoint
@@ -3727,7 +3735,7 @@ public class IndexShard extends AbstractIndexShardComponent implements IndicesCl
      * which is at least the value of the max_seq_no_of_updates marker on the primary after that operation was executed on the primary.
      *
      * @see #acquireReplicaOperationPermit(long, long, long, ActionListener, String, Object)
-     * @see RecoveryTarget#indexTranslogOperations(List, int, long, long, RetentionLeases, long, ActionListener)
+     * @see RecoveryTarget#indexTranslogOperations(List, int, long, long, long, RetentionLeases, long, ActionListener)
      */
     public void advanceMaxSeqNoOfUpdatesOrDeletes(long seqNo) {
         getEngine().advanceMaxSeqNoOfUpdatesOrDeletes(seqNo);

@@ -771,6 +771,7 @@ public class RecoverySourceHandler {
             recoveryTarget.indexTranslogOperations(
                 request.operations,
                 snapshot.totalOperations(),
+                shard.getLastKnownGlobalCheckpoint(),
                 maxSeenAutoIdTimestamp,
                 maxSeqNoOfUpdatesOrDeletes,
                 retentionLeases,

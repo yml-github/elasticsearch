@@ -66,6 +66,7 @@ public interface RecoveryTargetHandler {
     void indexTranslogOperations(
             List<Translog.Operation> operations,
             int totalTranslogOps,
+            long globalCheckpoint,
             long maxSeenAutoIdTimestampOnPrimary,
             long maxSeqNoOfUpdatesOrDeletesOnPrimary,
             RetentionLeases retentionLeases,

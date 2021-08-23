@@ -1075,6 +1075,13 @@ public final class IndexSettings {
         this.searchThrottled = searchThrottled;
     }
 
+    /**
+     * Returns false if index translog turn off using the
+     */
+    public boolean isTranslogWriting() {
+        return indexMetadata.getSettings().getAsInt(IndexMetadata.SETTING_NUMBER_OF_REPLICAS, 1) > 0;
+    }
+
     public long getMappingNestedFieldsLimit() {
         return mappingNestedFieldsLimit;
     }

@@ -142,6 +142,11 @@ public class IndexMetadata implements Diffable<IndexMetadata>, ToXContentFragmen
     public static final Setting<Integer> INDEX_NUMBER_OF_REPLICAS_SETTING =
         Setting.intSetting(SETTING_NUMBER_OF_REPLICAS, 1, 0, Property.Dynamic, Property.IndexScope);
 
+    // switch of translog writing
+    public static final String SETTING_TRANSLOG_WRITING = "index.translog_writing";
+    public static final Setting<Boolean> INDEX_TRANSLOG_WRITING_SETTING =
+        Setting.boolSetting(SETTING_TRANSLOG_WRITING, true, Property.IndexScope, Property.Final);
+
     public static final String SETTING_ROUTING_PARTITION_SIZE = "index.routing_partition_size";
     public static final Setting<Integer> INDEX_ROUTING_PARTITION_SIZE_SETTING =
             Setting.intSetting(SETTING_ROUTING_PARTITION_SIZE, 1, 1, Property.IndexScope);

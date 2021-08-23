@@ -30,11 +30,13 @@ public class RecoveryTranslogOperationsRequest extends RecoveryTransportRequest 
     private final long maxSeqNoOfUpdatesOrDeletesOnPrimary;
     private final RetentionLeases retentionLeases;
     private final long mappingVersionOnPrimary;
+    private long globalCheckpoint;
 
     RecoveryTranslogOperationsRequest(
             final long recoveryId,
             final long requestSeqNo,
             final ShardId shardId,
+            final long globalCheckpoint,
             final List<Translog.Operation> operations,
             final int totalTranslogOps,
             final long maxSeenAutoIdTimestampOnPrimary,
@@ -44,6 +46,7 @@ public class RecoveryTranslogOperationsRequest extends RecoveryTransportRequest 
         super(requestSeqNo);
         this.recoveryId = recoveryId;
         this.shardId = shardId;
+        this.globalCheckpoint = globalCheckpoint;
         this.operations = operations;
         this.totalTranslogOps = totalTranslogOps;
         this.maxSeenAutoIdTimestampOnPrimary = maxSeenAutoIdTimestampOnPrimary;
@@ -88,6 +91,11 @@ public class RecoveryTranslogOperationsRequest extends RecoveryTransportRequest 
     long mappingVersionOnPrimary() {
         return mappingVersionOnPrimary;
     }
+
+    public long globalCheckpoint() {
+        return globalCheckpoint;
+    }
+
 
     RecoveryTranslogOperationsRequest(StreamInput in) throws IOException {
         super(in);

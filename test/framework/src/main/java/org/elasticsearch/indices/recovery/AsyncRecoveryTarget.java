@@ -47,10 +47,10 @@ public class AsyncRecoveryTarget implements RecoveryTargetHandler {
     }
 
     @Override
-    public void indexTranslogOperations(List<Translog.Operation> operations, int totalTranslogOps,
+    public void indexTranslogOperations(List<Translog.Operation> operations, int totalTranslogOps, long globalCheckpoint,
                                         long maxSeenAutoIdTimestampOnPrimary, long maxSeqNoOfDeletesOrUpdatesOnPrimary,
                                         RetentionLeases retentionLeases, long mappingVersionOnPrimary, ActionListener<Long> listener) {
-        executor.execute(() -> target.indexTranslogOperations(operations, totalTranslogOps, maxSeenAutoIdTimestampOnPrimary,
+        executor.execute(() -> target.indexTranslogOperations(operations, totalTranslogOps, globalCheckpoint, maxSeenAutoIdTimestampOnPrimary,
             maxSeqNoOfDeletesOrUpdatesOnPrimary, retentionLeases, mappingVersionOnPrimary, listener));
     }
 

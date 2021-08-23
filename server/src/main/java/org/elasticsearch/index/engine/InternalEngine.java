@@ -957,7 +957,11 @@ public class InternalEngine extends Engine {
                 if (index.origin().isFromTranslog() == false) {
                     final Translog.Location location;
                     if (indexResult.getResultType() == Result.Type.SUCCESS) {
-                        location = translog.add(new Translog.Index(index, indexResult));
+                        if (engineConfig.getIndexSettings().isTranslogWriting()) {
+                            location = translog.add(new Translog.Index(index, indexResult));
+                        } else {
+                            location = null;
+                        }
                     } else if (indexResult.getSeqNo() != SequenceNumbers.UNASSIGNED_SEQ_NO) {
                         // if we have document failure, record it as a no-op in the translog and Lucene with the generated seq_no
                         final NoOp noOp = new NoOp(indexResult.getSeqNo(), index.primaryTerm(), index.origin(),
@@ -1338,7 +1342,12 @@ public class InternalEngine extends Engine {
                 }
             }
             if (delete.origin().isFromTranslog() == false && deleteResult.getResultType() == Result.Type.SUCCESS) {
-                final Translog.Location location = translog.add(new Translog.Delete(delete, deleteResult));
+                final Translog.Location location;
+                if (engineConfig.getIndexSettings().isTranslogWriting()) {
+                    location = translog.add(new Translog.Delete(delete, deleteResult));
+                } else {
+                    location = null;
+                }
                 deleteResult.setTranslogLocation(location);
             }
             localCheckpointTracker.markSeqNoAsProcessed(deleteResult.getSeqNo());
@@ -2580,6 +2589,15 @@ public class InternalEngine extends Engine {
     LocalCheckpointTracker getLocalCheckpointTracker() {
         return localCheckpointTracker;
     }
+
+    @Override
+    public void markSeqNoAsCompleted(long seqNo) {
+        // 不写translog log的情况下 修改本地的 状态和 primary 同步
+        if (!engineConfig.getIndexSettings().isTranslogWriting()) {
+            localCheckpointTracker.markSeqNoAsPersisted(seqNo);
+        }
+    }
+
 
     @Override
     public long getLastSyncedGlobalCheckpoint() {

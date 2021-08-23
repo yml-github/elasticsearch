@@ -552,6 +552,7 @@ public class RecoveryDuringReplicationTests extends ESIndexLevelReplicationTestC
                         public void indexTranslogOperations(
                                 final List<Translog.Operation> operations,
                                 final int totalTranslogOps,
+                                long globalCheckpoint,
                                 final long maxAutoIdTimestamp,
                                 final long maxSeqNoOfUpdates,
                                 final RetentionLeases retentionLeases,
@@ -586,6 +587,7 @@ public class RecoveryDuringReplicationTests extends ESIndexLevelReplicationTestC
                             super.indexTranslogOperations(
                                     operations,
                                     totalTranslogOps,
+                                    globalCheckpoint,
                                     maxAutoIdTimestamp,
                                     maxSeqNoOfUpdates,
                                     retentionLeases,
@@ -843,6 +845,7 @@ public class RecoveryDuringReplicationTests extends ESIndexLevelReplicationTestC
         public void indexTranslogOperations(
                 final List<Translog.Operation> operations,
                 final int totalTranslogOps,
+                long globalCheckpoint,
                 final long maxAutoIdTimestamp,
                 final long maxSeqNoOfUpdates,
                 final RetentionLeases retentionLeases,
@@ -852,7 +855,7 @@ public class RecoveryDuringReplicationTests extends ESIndexLevelReplicationTestC
                 blockIfNeeded(RecoveryState.Stage.TRANSLOG);
             }
             super.indexTranslogOperations(
-                operations, totalTranslogOps, maxAutoIdTimestamp, maxSeqNoOfUpdates, retentionLeases, mappingVersion, listener);
+                operations, totalTranslogOps, globalCheckpoint, maxAutoIdTimestamp, maxSeqNoOfUpdates, retentionLeases, mappingVersion, listener);
         }
 
         @Override

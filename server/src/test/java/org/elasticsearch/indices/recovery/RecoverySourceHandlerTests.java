@@ -232,7 +232,7 @@ public class RecoverySourceHandlerTests extends ESTestCase {
         final AtomicLong checkpointOnTarget = new AtomicLong(SequenceNumbers.NO_OPS_PERFORMED);
         RecoveryTargetHandler recoveryTarget = new TestRecoveryTargetHandler() {
             @Override
-            public void indexTranslogOperations(List<Translog.Operation> operations, int totalTranslogOps, long timestamp, long msu,
+            public void indexTranslogOperations(List<Translog.Operation> operations, int totalTranslogOps, long globalCheckpoint, long timestamp, long msu,
                                                 RetentionLeases retentionLeases, long mappingVersion, ActionListener<Long> listener) {
                 shippedOps.addAll(operations);
                 if (randomBoolean()) {
@@ -272,7 +272,7 @@ public class RecoverySourceHandlerTests extends ESTestCase {
         final AtomicBoolean wasFailed = new AtomicBoolean();
         RecoveryTargetHandler recoveryTarget = new TestRecoveryTargetHandler() {
             @Override
-            public void indexTranslogOperations(List<Translog.Operation> operations, int totalTranslogOps, long timestamp,
+            public void indexTranslogOperations(List<Translog.Operation> operations, int totalTranslogOps, long globalCheckpoint, long timestamp,
                                                 long msu, RetentionLeases retentionLeases, long mappingVersion,
                                                 ActionListener<Long> listener) {
                 if (randomBoolean()) {
@@ -310,7 +310,7 @@ public class RecoverySourceHandlerTests extends ESTestCase {
         AtomicBoolean received = new AtomicBoolean();
         RecoveryTargetHandler target = new TestRecoveryTargetHandler() {
             @Override
-            public void indexTranslogOperations(List<Translog.Operation> operations, int receivedTotalOps,
+            public void indexTranslogOperations(List<Translog.Operation> operations, int receivedTotalOps, long globalCheckpoint,
                                                 long receivedMaxSeenAutoIdTimestamp, long receivedMaxSeqNoOfUpdatesOrDeletes,
                                                 RetentionLeases receivedRetentionLease, long receivedMappingVersion,
                                                 ActionListener<Long> listener) {
@@ -861,6 +861,7 @@ public class RecoverySourceHandlerTests extends ESTestCase {
         public void indexTranslogOperations(
                 final List<Translog.Operation> operations,
                 final int totalTranslogOps,
+                long globalCheckpoint,
                 final long timestamp,
                 final long msu,
                 final RetentionLeases retentionLeases,

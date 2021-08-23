@@ -353,6 +353,7 @@ public class RecoveryTarget extends AbstractRefCounted implements RecoveryTarget
     public void indexTranslogOperations(
             final List<Translog.Operation> operations,
             final int totalTranslogOps,
+            long globalCheckpoint,
             final long maxSeenAutoIdTimestampOnPrimary,
             final long maxSeqNoOfDeletesOrUpdatesOnPrimary,
             final RetentionLeases retentionLeases,
@@ -394,6 +395,8 @@ public class RecoveryTarget extends AbstractRefCounted implements RecoveryTarget
                     ExceptionsHelper.reThrowIfNotNull(result.getFailure());
                 }
             }
+
+            resolve(globalCheckpoint);
             // update stats only after all operations completed (to ensure that mapping updates don't mess with stats)
             translog.incrementRecoveredOperations(operations.size());
             indexShard().sync();
@@ -401,6 +404,11 @@ public class RecoveryTarget extends AbstractRefCounted implements RecoveryTarget
             indexShard().afterWriteOperation();
             return indexShard().getLocalCheckpoint();
         });
+    }
+
+    // 处理当不写translog，副本的 localcheckpoint 跟上全局
+    private void resolve(long globalCheckpoint) {
+        indexShard.markNoTranslogSync(globalCheckpoint);
     }
 
     @Override
