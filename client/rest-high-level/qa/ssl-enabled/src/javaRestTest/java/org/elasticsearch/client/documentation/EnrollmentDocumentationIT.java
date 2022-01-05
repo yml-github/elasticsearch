@@ -28,6 +28,7 @@ import java.util.concurrent.TimeUnit;
 
 import static org.hamcrest.Matchers.startsWith;
 
+@SuppressWarnings("removal")
 public class EnrollmentDocumentationIT extends ESRestHighLevelClientTestCase {
     static Path HTTP_TRUSTSTORE;
 
@@ -52,6 +53,17 @@ public class EnrollmentDocumentationIT extends ESRestHighLevelClientTestCase {
             .build();
     }
 
+    /**
+     * Cleanup for these tests requires the admin client to have access to the
+     * truststore, so we use the same settings that we're using for the rest
+     * client in this test class.
+     * @return Settings for the admin client.
+     */
+    @Override
+    protected Settings restAdminSettings() {
+        return restClientSettings();
+    }
+
     public void testNodeEnrollment() throws Exception {
         RestHighLevelClient client = highLevelClient();
 
@@ -63,9 +75,10 @@ public class EnrollmentDocumentationIT extends ESRestHighLevelClientTestCase {
             // tag::node-enrollment-response
             String httpCaKey = response.getHttpCaKey(); // <1>
             String httpCaCert = response.getHttpCaCert(); // <2>
-            String transportKey = response.getTransportKey(); // <3>
-            String transportCert = response.getTransportCert(); // <4>
-            List<String> nodesAddresses = response.getNodesAddresses();  // <5>
+            String transportCaCert = response.getTransportCaCert(); // <3>
+            String transportKey = response.getTransportKey(); // <4>
+            String transportCert = response.getTransportCert(); // <5>
+            List<String> nodesAddresses = response.getNodesAddresses();  // <6>
             // end::node-enrollment-response
         }
 

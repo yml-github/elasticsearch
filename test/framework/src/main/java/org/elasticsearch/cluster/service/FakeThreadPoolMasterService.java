@@ -10,8 +10,8 @@ package org.elasticsearch.cluster.service;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.elasticsearch.action.ActionListener;
-import org.elasticsearch.cluster.ClusterStatePublicationEvent;
 import org.elasticsearch.cluster.ClusterState;
+import org.elasticsearch.cluster.ClusterStatePublicationEvent;
 import org.elasticsearch.cluster.coordination.ClusterStatePublisher.AckListener;
 import org.elasticsearch.common.UUIDs;
 import org.elasticsearch.common.settings.ClusterSettings;
@@ -41,18 +41,34 @@ public class FakeThreadPoolMasterService extends MasterService {
     private boolean taskInProgress = false;
     private boolean waitForPublish = false;
 
-    public FakeThreadPoolMasterService(String nodeName, String serviceName, ThreadPool threadPool,
-                                       Consumer<Runnable> onTaskAvailableToRun) {
-        super(Settings.builder().put(Node.NODE_NAME_SETTING.getKey(), nodeName).build(),
-            new ClusterSettings(Settings.EMPTY, ClusterSettings.BUILT_IN_CLUSTER_SETTINGS), threadPool);
+    public FakeThreadPoolMasterService(
+        String nodeName,
+        String serviceName,
+        ThreadPool threadPool,
+        Consumer<Runnable> onTaskAvailableToRun
+    ) {
+        super(
+            Settings.builder().put(Node.NODE_NAME_SETTING.getKey(), nodeName).build(),
+            new ClusterSettings(Settings.EMPTY, ClusterSettings.BUILT_IN_CLUSTER_SETTINGS),
+            threadPool
+        );
         this.name = serviceName;
         this.onTaskAvailableToRun = onTaskAvailableToRun;
     }
 
     @Override
     protected PrioritizedEsThreadPoolExecutor createThreadPoolExecutor() {
-        return new PrioritizedEsThreadPoolExecutor(name, 1, 1, 1, TimeUnit.SECONDS, EsExecutors.daemonThreadFactory(name),
-            null, null, PrioritizedEsThreadPoolExecutor.StarvationWatcher.NOOP_STARVATION_WATCHER) {
+        return new PrioritizedEsThreadPoolExecutor(
+            name,
+            1,
+            1,
+            1,
+            TimeUnit.SECONDS,
+            EsExecutors.daemonThreadFactory(name),
+            null,
+            null,
+            PrioritizedEsThreadPoolExecutor.StarvationWatcher.NOOP_STARVATION_WATCHER
+        ) {
 
             @Override
             public void execute(Runnable command, final TimeValue timeout, final Runnable timeoutCallback) {
@@ -111,7 +127,7 @@ public class FakeThreadPoolMasterService extends MasterService {
     }
 
     @Override
-    protected void publish(ClusterStatePublicationEvent clusterStatePublicationEvent, TaskOutputs taskOutputs, long startTimeMillis) {
+    protected void publish(ClusterStatePublicationEvent clusterStatePublicationEvent, TaskOutputs taskOutputs) {
         assert waitForPublish == false;
         waitForPublish = true;
         final AckListener ackListener = taskOutputs.createAckListener(threadPool, clusterStatePublicationEvent.getNewState());
@@ -140,7 +156,7 @@ public class FakeThreadPoolMasterService extends MasterService {
                 assert waitForPublish;
                 waitForPublish = false;
                 try {
-                    onPublicationFailed(clusterStatePublicationEvent, taskOutputs, startTimeMillis, e);
+                    onPublicationFailed(clusterStatePublicationEvent, taskOutputs, e);
                 } finally {
                     taskInProgress = false;
                     scheduleNextTaskIfNecessary();
@@ -155,10 +171,15 @@ public class FakeThreadPoolMasterService extends MasterService {
 
             @Override
             public String toString() {
-                return "publish change of cluster state from version [" + clusterStatePublicationEvent.getOldState().version() +
-                    "] in term [" + clusterStatePublicationEvent.getOldState().term() + "] to version [" +
-                    clusterStatePublicationEvent.getNewState().version() + "] in term [" +
-                    clusterStatePublicationEvent.getNewState().term() + "]";
+                return "publish change of cluster state from version ["
+                    + clusterStatePublicationEvent.getOldState().version()
+                    + "] in term ["
+                    + clusterStatePublicationEvent.getOldState().term()
+                    + "] to version ["
+                    + clusterStatePublicationEvent.getNewState().version()
+                    + "] in term ["
+                    + clusterStatePublicationEvent.getNewState().term()
+                    + "]";
             }
         }));
     }
