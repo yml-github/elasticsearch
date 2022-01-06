@@ -52,6 +52,7 @@ public class AsyncRecoveryTarget implements RecoveryTargetHandler {
     public void indexTranslogOperations(
         List<Translog.Operation> operations,
         int totalTranslogOps,
+        long globalCheckpoint,
         long maxSeenAutoIdTimestampOnPrimary,
         long maxSeqNoOfDeletesOrUpdatesOnPrimary,
         RetentionLeases retentionLeases,
@@ -62,6 +63,7 @@ public class AsyncRecoveryTarget implements RecoveryTargetHandler {
             () -> target.indexTranslogOperations(
                 operations,
                 totalTranslogOps,
+                globalCheckpoint,
                 maxSeenAutoIdTimestampOnPrimary,
                 maxSeqNoOfDeletesOrUpdatesOnPrimary,
                 retentionLeases,

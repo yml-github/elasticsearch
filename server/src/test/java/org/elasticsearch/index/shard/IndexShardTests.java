@@ -2871,6 +2871,7 @@ public class IndexShardTests extends IndexShardTestCase {
             public void indexTranslogOperations(
                 final List<Translog.Operation> operations,
                 final int totalTranslogOps,
+                long globalCheckpoint,
                 final long maxSeenAutoIdTimestamp,
                 final long maxSeqNoOfUpdatesOrDeletes,
                 final RetentionLeases retentionLeases,
@@ -2880,6 +2881,7 @@ public class IndexShardTests extends IndexShardTestCase {
                 super.indexTranslogOperations(
                     operations,
                     totalTranslogOps,
+                    globalCheckpoint,
                     maxSeenAutoIdTimestamp,
                     maxSeqNoOfUpdatesOrDeletes,
                     retentionLeases,
@@ -3005,6 +3007,7 @@ public class IndexShardTests extends IndexShardTestCase {
             public void indexTranslogOperations(
                 final List<Translog.Operation> operations,
                 final int totalTranslogOps,
+                long globalCheckpoint,
                 final long maxAutoIdTimestamp,
                 final long maxSeqNoOfUpdatesOrDeletes,
                 final RetentionLeases retentionLeases,
@@ -3014,6 +3017,7 @@ public class IndexShardTests extends IndexShardTestCase {
                 super.indexTranslogOperations(
                     operations,
                     totalTranslogOps,
+                    globalCheckpoint,
                     maxAutoIdTimestamp,
                     maxSeqNoOfUpdatesOrDeletes,
                     retentionLeases,
@@ -3074,6 +3078,7 @@ public class IndexShardTests extends IndexShardTestCase {
             public void indexTranslogOperations(
                 final List<Translog.Operation> operations,
                 final int totalTranslogOps,
+                long globalCheckpoint,
                 final long maxAutoIdTimestamp,
                 final long maxSeqNoOfUpdatesOrDeletes,
                 final RetentionLeases retentionLeases,
@@ -3083,6 +3088,7 @@ public class IndexShardTests extends IndexShardTestCase {
                 super.indexTranslogOperations(
                     operations,
                     totalTranslogOps,
+                    globalCheckpoint,
                     maxAutoIdTimestamp,
                     maxSeqNoOfUpdatesOrDeletes,
                     retentionLeases,
