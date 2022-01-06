@@ -273,6 +273,7 @@ public class RecoverySourceHandlerTests extends ESTestCase {
             public void indexTranslogOperations(
                 List<Translog.Operation> operations,
                 int totalTranslogOps,
+                long globalCheckpoint,
                 long timestamp,
                 long msu,
                 RetentionLeases retentionLeases,
@@ -338,6 +339,7 @@ public class RecoverySourceHandlerTests extends ESTestCase {
             public void indexTranslogOperations(
                 List<Translog.Operation> operations,
                 int totalTranslogOps,
+                long globalCheckpoint,
                 long timestamp,
                 long msu,
                 RetentionLeases retentionLeases,
@@ -400,6 +402,7 @@ public class RecoverySourceHandlerTests extends ESTestCase {
             public void indexTranslogOperations(
                 List<Translog.Operation> operations,
                 int receivedTotalOps,
+                long globalCheckpoint,
                 long receivedMaxSeenAutoIdTimestamp,
                 long receivedMaxSeqNoOfUpdatesOrDeletes,
                 RetentionLeases receivedRetentionLease,
@@ -1795,6 +1798,7 @@ public class RecoverySourceHandlerTests extends ESTestCase {
         public void indexTranslogOperations(
             final List<Translog.Operation> operations,
             final int totalTranslogOps,
+            long globalCheckpoint,
             final long timestamp,
             final long msu,
             final RetentionLeases retentionLeases,

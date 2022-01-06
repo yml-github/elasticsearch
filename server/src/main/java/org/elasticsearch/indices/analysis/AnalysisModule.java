@@ -57,6 +57,7 @@ public final class AnalysisModule {
             .put(IndexMetadata.SETTING_VERSION_CREATED, Version.CURRENT)
             .put(IndexMetadata.SETTING_NUMBER_OF_REPLICAS, 1)
             .put(IndexMetadata.SETTING_NUMBER_OF_SHARDS, 1)
+            .put(IndexMetadata.SETTING_TRANSLOG_WRITING, true)
             .build();
         IndexMetadata metadata = IndexMetadata.builder("_na_").settings(build).build();
         NA_INDEX_SETTINGS = new IndexSettings(metadata, Settings.EMPTY);
