@@ -13,6 +13,7 @@ import org.elasticsearch.common.io.stream.StreamOutput;
 import org.elasticsearch.search.DocValueFormat;
 import org.elasticsearch.search.aggregations.AggregationReduceContext;
 import org.elasticsearch.search.aggregations.InternalAggregation;
+import org.elasticsearch.search.aggregations.support.SamplingContext;
 import org.elasticsearch.xcontent.XContentBuilder;
 
 import java.io.IOException;
@@ -22,13 +23,13 @@ import java.util.Objects;
 
 public class InternalMedianAbsoluteDeviation extends InternalNumericMetricsAggregation.SingleValue implements MedianAbsoluteDeviation {
 
-    static double computeMedianAbsoluteDeviation(TDigestState valuesSketch) {
+    public static double computeMedianAbsoluteDeviation(TDigestState valuesSketch) {
 
         if (valuesSketch.size() == 0) {
             return Double.NaN;
         } else {
             final double approximateMedian = valuesSketch.quantile(0.5);
-            final TDigestState approximatedDeviationsSketch = new TDigestState(valuesSketch.compression());
+            final TDigestState approximatedDeviationsSketch = TDigestState.createUsingParamsFrom(valuesSketch);
             valuesSketch.centroids().forEach(centroid -> {
                 final double deviation = Math.abs(approximateMedian - centroid.mean());
                 approximatedDeviationsSketch.add(deviation, centroid.count());
@@ -42,16 +43,13 @@ public class InternalMedianAbsoluteDeviation extends InternalNumericMetricsAggre
     private final double medianAbsoluteDeviation;
 
     InternalMedianAbsoluteDeviation(String name, Map<String, Object> metadata, DocValueFormat format, TDigestState valuesSketch) {
-        super(name, metadata);
-        this.format = Objects.requireNonNull(format);
+        super(name, Objects.requireNonNull(format), metadata);
         this.valuesSketch = Objects.requireNonNull(valuesSketch);
-
         this.medianAbsoluteDeviation = computeMedianAbsoluteDeviation(this.valuesSketch);
     }
 
     public InternalMedianAbsoluteDeviation(StreamInput in) throws IOException {
         super(in);
-        format = in.readNamedWriteable(DocValueFormat.class);
         valuesSketch = TDigestState.read(in);
         medianAbsoluteDeviation = in.readDouble();
     }
@@ -63,15 +61,30 @@ public class InternalMedianAbsoluteDeviation extends InternalNumericMetricsAggre
         out.writeDouble(medianAbsoluteDeviation);
     }
 
+    static InternalMedianAbsoluteDeviation empty(
+        String name,
+        Map<String, Object> metadata,
+        DocValueFormat format,
+        double compression,
+        TDigestExecutionHint executionHint
+    ) {
+        return new InternalMedianAbsoluteDeviation(name, metadata, format, TDigestState.create(compression, executionHint));
+    }
+
     @Override
     public InternalAggregation reduce(List<InternalAggregation> aggregations, AggregationReduceContext reduceContext) {
-        final TDigestState valueMerged = new TDigestState(valuesSketch.compression());
+        final TDigestState valueMerged = TDigestState.createUsingParamsFrom(valuesSketch);
         for (InternalAggregation aggregation : aggregations) {
             final InternalMedianAbsoluteDeviation madAggregation = (InternalMedianAbsoluteDeviation) aggregation;
             valueMerged.add(madAggregation.valuesSketch);
         }
 
         return new InternalMedianAbsoluteDeviation(name, metadata, format, valueMerged);
+    }
+
+    @Override
+    public InternalAggregation finalizeSampling(SamplingContext samplingContext) {
+        return this;
     }
 
     @Override

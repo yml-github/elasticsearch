@@ -8,7 +8,8 @@
 
 package org.elasticsearch.indices;
 
-import org.elasticsearch.Version;
+import org.elasticsearch.index.IndexVersion;
+import org.elasticsearch.index.IndexVersions;
 import org.elasticsearch.index.mapper.DataStreamTimestampFieldMapper;
 import org.elasticsearch.index.mapper.DocCountFieldMapper;
 import org.elasticsearch.index.mapper.FieldNamesFieldMapper;
@@ -22,6 +23,7 @@ import org.elasticsearch.index.mapper.MapperRegistry;
 import org.elasticsearch.index.mapper.MappingParserContext;
 import org.elasticsearch.index.mapper.MetadataFieldMapper;
 import org.elasticsearch.index.mapper.NestedPathFieldMapper;
+import org.elasticsearch.index.mapper.ObjectMapper;
 import org.elasticsearch.index.mapper.RoutingFieldMapper;
 import org.elasticsearch.index.mapper.RuntimeField;
 import org.elasticsearch.index.mapper.SeqNoFieldMapper;
@@ -31,7 +33,7 @@ import org.elasticsearch.index.mapper.TimeSeriesIdFieldMapper;
 import org.elasticsearch.index.mapper.VersionFieldMapper;
 import org.elasticsearch.plugins.MapperPlugin;
 import org.elasticsearch.test.ESTestCase;
-import org.elasticsearch.test.VersionUtils;
+import org.elasticsearch.test.index.IndexVersionUtils;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -45,6 +47,7 @@ import java.util.function.Predicate;
 
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.greaterThan;
+import static org.hamcrest.Matchers.instanceOf;
 
 public class IndicesModuleTests extends ESTestCase {
 
@@ -87,8 +90,11 @@ public class IndicesModuleTests extends ESTestCase {
     public void testBuiltinMappers() {
         IndicesModule module = new IndicesModule(Collections.emptyList());
         {
-            Version version = VersionUtils.randomVersionBetween(random(), Version.V_8_0_0, Version.CURRENT);
-            assertFalse(module.getMapperRegistry().getMapperParsers().isEmpty());
+            IndexVersion version = IndexVersionUtils.randomVersionBetween(random(), IndexVersions.V_8_0_0, IndexVersion.current());
+            assertThat(
+                module.getMapperRegistry().getMapperParser("object", IndexVersion.current()),
+                instanceOf(ObjectMapper.TypeParser.class)
+            );
             assertFalse(module.getMapperRegistry().getMetadataMapperParsers(version).isEmpty());
             Map<String, MetadataFieldMapper.TypeParser> metadataMapperParsers = module.getMapperRegistry()
                 .getMetadataMapperParsers(version);
@@ -99,10 +105,10 @@ public class IndicesModuleTests extends ESTestCase {
             }
         }
         {
-            Version version = VersionUtils.randomVersionBetween(
+            IndexVersion version = IndexVersionUtils.randomVersionBetween(
                 random(),
-                Version.V_7_0_0,
-                VersionUtils.getPreviousVersion(Version.V_8_0_0)
+                IndexVersions.V_7_0_0,
+                IndexVersionUtils.getPreviousVersion(IndexVersions.V_8_0_0)
             );
             assertEquals(EXPECTED_METADATA_FIELDS.length - 1, module.getMapperRegistry().getMetadataMapperParsers(version).size());
         }
@@ -112,13 +118,14 @@ public class IndicesModuleTests extends ESTestCase {
         IndicesModule noPluginsModule = new IndicesModule(Collections.emptyList());
         IndicesModule module = new IndicesModule(fakePlugins);
         MapperRegistry registry = module.getMapperRegistry();
-        assertThat(registry.getMapperParsers().size(), greaterThan(noPluginsModule.getMapperRegistry().getMapperParsers().size()));
+        assertThat(registry.getMapperParser("fake-mapper", IndexVersion.current()), instanceOf(FakeMapperParser.class));
+        assertNull(noPluginsModule.getMapperRegistry().getMapperParser("fake-mapper", IndexVersion.current()));
         assertThat(
-            registry.getMetadataMapperParsers(Version.CURRENT).size(),
-            greaterThan(noPluginsModule.getMapperRegistry().getMetadataMapperParsers(Version.CURRENT).size())
+            registry.getMetadataMapperParsers(IndexVersion.current()).size(),
+            greaterThan(noPluginsModule.getMapperRegistry().getMetadataMapperParsers(IndexVersion.current()).size())
         );
         Map<String, MetadataFieldMapper.TypeParser> metadataMapperParsers = module.getMapperRegistry()
-            .getMetadataMapperParsers(Version.CURRENT);
+            .getMetadataMapperParsers(IndexVersion.current());
         Iterator<String> iterator = metadataMapperParsers.keySet().iterator();
         assertEquals(IgnoredFieldMapper.NAME, iterator.next());
         String last = null;
@@ -219,24 +226,20 @@ public class IndicesModuleTests extends ESTestCase {
 
     public void testFieldNamesIsLast() {
         IndicesModule module = new IndicesModule(Collections.emptyList());
-        Version version = VersionUtils.randomCompatibleVersion(random(), Version.CURRENT);
+        IndexVersion version = IndexVersionUtils.randomVersionBetween(random(), IndexVersions.MINIMUM_COMPATIBLE, IndexVersion.current());
         List<String> fieldNames = new ArrayList<>(module.getMapperRegistry().getMetadataMapperParsers(version).keySet());
         assertEquals(FieldNamesFieldMapper.NAME, fieldNames.get(fieldNames.size() - 1));
     }
 
     public void testFieldNamesIsLastWithPlugins() {
         IndicesModule module = new IndicesModule(fakePlugins);
-        Version version = VersionUtils.randomCompatibleVersion(random(), Version.CURRENT);
+        IndexVersion version = IndexVersionUtils.randomVersionBetween(random(), IndexVersions.MINIMUM_COMPATIBLE, IndexVersion.current());
         List<String> fieldNames = new ArrayList<>(module.getMapperRegistry().getMetadataMapperParsers(version).keySet());
         assertEquals(FieldNamesFieldMapper.NAME, fieldNames.get(fieldNames.size() - 1));
     }
 
     public void testGetFieldFilter() {
         List<MapperPlugin> mapperPlugins = Arrays.asList(new MapperPlugin() {
-            @Override
-            public Function<String, Predicate<String>> getFieldFilter() {
-                return MapperPlugin.NOOP_FIELD_FILTER;
-            }
         }, new MapperPlugin() {
             @Override
             public Function<String, Predicate<String>> getFieldFilter() {
@@ -285,10 +288,6 @@ public class IndicesModuleTests extends ESTestCase {
 
     public void testNoOpFieldPredicate() {
         List<MapperPlugin> mapperPlugins = Arrays.asList(new MapperPlugin() {
-            @Override
-            public Function<String, Predicate<String>> getFieldFilter() {
-                return MapperPlugin.NOOP_FIELD_FILTER;
-            }
         }, new MapperPlugin() {
             @Override
             public Function<String, Predicate<String>> getFieldFilter() {

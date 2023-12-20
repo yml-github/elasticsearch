@@ -9,6 +9,7 @@
 package org.elasticsearch.search.aggregations.pipeline;
 
 import org.elasticsearch.common.Strings;
+import org.elasticsearch.common.util.Maps;
 import org.elasticsearch.search.DocValueFormat;
 import org.elasticsearch.search.aggregations.Aggregation.CommonFields;
 import org.elasticsearch.search.aggregations.ParsedAggregation;
@@ -78,7 +79,7 @@ public class InternalPercentilesBucketTests extends InternalAggregationTestCase<
         ParsedPercentilesBucket parsedPercentiles = (ParsedPercentilesBucket) parsedAggregation;
 
         for (Percentile percentile : aggregation) {
-            Double percent = percentile.getPercent();
+            Double percent = percentile.percent();
             assertEquals(aggregation.percentile(percent), parsedPercentiles.percentile(percent), 0);
             // we cannot ensure we get the same as_string output for Double.NaN values since they are rendered as
             // null and we don't have a formatted string representation in the rest output
@@ -103,10 +104,10 @@ public class InternalPercentilesBucketTests extends InternalAggregationTestCase<
             Percentile percentile = iterator.next();
             String percentileName = nameIterator.next();
 
-            assertEquals(percent, percentile.getPercent(), 0.0d);
+            assertEquals(percent, percentile.percent(), 0.0d);
             assertEquals(percent, Double.valueOf(percentileName), 0.0d);
 
-            assertEquals(aggregation.percentile(percent), percentile.getValue(), 0.0d);
+            assertEquals(aggregation.percentile(percent), percentile.value(), 0.0d);
         }
         assertFalse(iterator.hasNext());
         assertFalse(nameIterator.hasNext());
@@ -195,34 +196,31 @@ public class InternalPercentilesBucketTests extends InternalAggregationTestCase<
         DocValueFormat formatter = instance.formatter();
         Map<String, Object> metadata = instance.getMetadata();
         switch (between(0, 3)) {
-            case 0:
-                name += randomAlphaOfLength(5);
-                break;
-            case 1:
+            case 0 -> name += randomAlphaOfLength(5);
+            case 1 -> {
                 percents = Arrays.copyOf(percents, percents.length);
                 percents[percents.length - 1] = randomDouble();
-                break;
-            case 2:
+            }
+            case 2 -> {
                 percentiles = Arrays.copyOf(percentiles, percentiles.length);
                 percentiles[percentiles.length - 1] = randomDouble();
-                break;
-            case 3:
+            }
+            case 3 -> {
                 if (metadata == null) {
-                    metadata = new HashMap<>(1);
+                    metadata = Maps.newMapWithExpectedSize(1);
                 } else {
                     metadata = new HashMap<>(instance.getMetadata());
                 }
                 metadata.put(randomAlphaOfLength(15), randomInt());
-                break;
-            default:
-                throw new AssertionError("Illegal randomisation branch");
+            }
+            default -> throw new AssertionError("Illegal randomisation branch");
         }
         return new InternalPercentilesBucket(name, percents, percentiles, randomBoolean(), formatter, metadata);
     }
 
     private double[] extractPercentiles(InternalPercentilesBucket instance) {
         List<Double> values = new ArrayList<>();
-        instance.iterator().forEachRemaining(percentile -> values.add(percentile.getValue()));
+        instance.iterator().forEachRemaining(percentile -> values.add(percentile.value()));
         double[] valuesArray = new double[values.size()];
         for (int i = 0; i < values.size(); i++) {
             valuesArray[i] = values.get(i);
@@ -232,7 +230,7 @@ public class InternalPercentilesBucketTests extends InternalAggregationTestCase<
 
     private double[] extractPercents(InternalPercentilesBucket instance) {
         List<Double> percents = new ArrayList<>();
-        instance.iterator().forEachRemaining(percentile -> percents.add(percentile.getPercent()));
+        instance.iterator().forEachRemaining(percentile -> percents.add(percentile.percent()));
         double[] percentArray = new double[percents.size()];
         for (int i = 0; i < percents.size(); i++) {
             percentArray[i] = percents.get(i);

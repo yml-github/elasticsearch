@@ -12,7 +12,9 @@ import org.elasticsearch.ElasticsearchException;
 import org.elasticsearch.ElasticsearchParseException;
 import org.elasticsearch.ExceptionsHelper;
 import org.elasticsearch.common.bytes.BytesReference;
+import org.elasticsearch.common.util.Maps;
 import org.elasticsearch.common.xcontent.LoggingDeprecationHandler;
+import org.elasticsearch.core.Nullable;
 import org.elasticsearch.script.Script;
 import org.elasticsearch.script.ScriptService;
 import org.elasticsearch.script.ScriptType;
@@ -28,7 +30,6 @@ import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -216,6 +217,17 @@ public final class ConfigurationUtils {
         }
     }
 
+    @Nullable
+    public static Boolean readOptionalBooleanProperty(
+        String processorType,
+        String processorTag,
+        Map<String, Object> configuration,
+        String propertyName
+    ) {
+        Object value = configuration.remove(propertyName);
+        return readBoolean(processorType, processorTag, propertyName, value);
+    }
+
     private static Boolean readBoolean(String processorType, String processorTag, String propertyName, Object value) {
         if (value == null) {
             return null;
@@ -302,6 +314,27 @@ public final class ConfigurationUtils {
         Object value = configuration.remove(propertyName);
         if (value == null) {
             return null;
+        }
+        return readList(processorType, processorTag, propertyName, value);
+    }
+
+    /**
+     * Returns and removes the specified property of type list from the specified configuration map.
+     *
+     * If the property value isn't of type list or string an {@link ElasticsearchParseException} is thrown.
+     */
+    public static List<String> readOptionalListOrString(
+        String processorType,
+        String processorTag,
+        Map<String, Object> configuration,
+        String propertyName
+    ) {
+        Object value = configuration.remove(propertyName);
+        if (value == null) {
+            return List.of();
+        }
+        if (value instanceof String) {
+            return List.of(readString(processorType, processorTag, propertyName, value));
         }
         return readList(processorType, processorTag, propertyName, value);
     }
@@ -410,7 +443,7 @@ public final class ConfigurationUtils {
     ) {
         String mediaType = readStringProperty(processorType, processorTag, configuration, propertyName, defaultValue);
 
-        if (Arrays.asList(VALID_MEDIA_TYPES).contains(mediaType) == false) {
+        if (List.of(VALID_MEDIA_TYPES).contains(mediaType) == false) {
             throw newConfigurationException(
                 processorType,
                 processorTag,
@@ -477,7 +510,7 @@ public final class ConfigurationUtils {
             throw exception;
         }
 
-        return processors;
+        return Collections.unmodifiableList(processors);
     }
 
     public static TemplateScript.Factory readTemplateProperty(
@@ -504,7 +537,7 @@ public final class ConfigurationUtils {
             // modified if templating is not available so a script that simply returns an unmodified `propertyValue`
             // is returned.
             if (scriptService.isLangSupported(DEFAULT_TEMPLATE_LANG) && propertyValue.contains("{{")) {
-                Script script = new Script(ScriptType.INLINE, DEFAULT_TEMPLATE_LANG, propertyValue, Collections.emptyMap());
+                Script script = new Script(ScriptType.INLINE, DEFAULT_TEMPLATE_LANG, propertyValue, Map.of());
                 return scriptService.compile(script, TemplateScript.CONTEXT);
             } else {
                 return (params) -> new TemplateScript(params) {
@@ -546,7 +579,7 @@ public final class ConfigurationUtils {
         if (config instanceof Map) {
             return readProcessor(processorFactories, scriptService, type, (Map<String, Object>) config);
         } else if (config instanceof String && "script".equals(type)) {
-            Map<String, Object> normalizedScript = new HashMap<>(1);
+            Map<String, Object> normalizedScript = Maps.newMapWithExpectedSize(1);
             normalizedScript.put(ScriptType.INLINE.getParseField().getPreferredName(), config);
             return readProcessor(processorFactories, scriptService, type, normalizedScript);
         } else {
@@ -589,7 +622,7 @@ public final class ConfigurationUtils {
                     );
                 }
                 if (onFailureProcessors.size() > 0 || ignoreFailure) {
-                    processor = new CompoundProcessor(ignoreFailure, Collections.singletonList(processor), onFailureProcessors);
+                    processor = new OnFailureProcessor(ignoreFailure, processor, onFailureProcessors);
                 }
                 if (conditionalScript != null) {
                     processor = new ConditionalProcessor(tag, description, conditionalScript, scriptService, processor);
@@ -622,7 +655,7 @@ public final class ConfigurationUtils {
         if (scriptConfig instanceof Map<?, ?>) {
             return (Map<String, Object>) scriptConfig;
         } else if (scriptConfig instanceof String) {
-            return Collections.singletonMap("source", scriptConfig);
+            return Map.of("source", scriptConfig);
         } else {
             throw newConfigurationException(
                 "conditional",

@@ -9,13 +9,15 @@ package org.elasticsearch.xpack.security.authc;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-import org.apache.logging.log4j.message.ParameterizedMessage;
 import org.elasticsearch.action.ActionListener;
+import org.elasticsearch.xpack.core.security.action.apikey.ApiKey;
 import org.elasticsearch.xpack.core.security.authc.Authentication;
 import org.elasticsearch.xpack.core.security.authc.AuthenticationResult;
 import org.elasticsearch.xpack.core.security.authc.AuthenticationToken;
 import org.elasticsearch.xpack.core.security.support.Exceptions;
 import org.elasticsearch.xpack.security.authc.ApiKeyService.ApiKeyCredentials;
+
+import static org.elasticsearch.core.Strings.format;
 
 class ApiKeyAuthenticator implements Authenticator {
 
@@ -36,7 +38,9 @@ class ApiKeyAuthenticator implements Authenticator {
 
     @Override
     public AuthenticationToken extractCredentials(Context context) {
-        return apiKeyService.getCredentialsFromHeader(context.getThreadContext());
+        final ApiKeyCredentials apiKeyCredentials = apiKeyService.parseCredentialsFromApiKeyString(context.getApiKeyString());
+        assert apiKeyCredentials == null || apiKeyCredentials.getExpectedType() == ApiKey.Type.REST;
+        return apiKeyCredentials;
     }
 
     @Override
@@ -49,22 +53,20 @@ class ApiKeyAuthenticator implements Authenticator {
         ApiKeyCredentials apiKeyCredentials = (ApiKeyCredentials) authenticationToken;
         apiKeyService.tryAuthenticate(context.getThreadContext(), apiKeyCredentials, ActionListener.wrap(authResult -> {
             if (authResult.isAuthenticated()) {
-                final Authentication authentication = apiKeyService.createApiKeyAuthentication(authResult, nodeName);
+                final Authentication authentication = Authentication.newApiKeyAuthentication(authResult, nodeName);
                 listener.onResponse(AuthenticationResult.success(authentication));
             } else if (authResult.getStatus() == AuthenticationResult.Status.TERMINATE) {
                 Exception e = (authResult.getException() != null)
                     ? authResult.getException()
                     : Exceptions.authenticationError(authResult.getMessage());
-                logger.debug(
-                    new ParameterizedMessage("API key service terminated authentication for request [{}]", context.getRequest()),
-                    e
-                );
+                logger.debug(() -> "API key service terminated authentication for request [" + context.getRequest() + "]", e);
+                context.getRequest().exceptionProcessingRequest(e, authenticationToken);
                 listener.onFailure(e);
             } else {
                 if (authResult.getMessage() != null) {
                     if (authResult.getException() != null) {
                         logger.warn(
-                            new ParameterizedMessage("Authentication using apikey failed - {}", authResult.getMessage()),
+                            () -> format("Authentication using apikey failed - %s", authResult.getMessage()),
                             authResult.getException()
                         );
                     } else {

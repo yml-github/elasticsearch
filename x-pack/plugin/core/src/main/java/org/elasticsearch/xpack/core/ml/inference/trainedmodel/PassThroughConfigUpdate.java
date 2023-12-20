@@ -7,6 +7,8 @@
 
 package org.elasticsearch.xpack.core.ml.inference.trainedmodel;
 
+import org.elasticsearch.TransportVersion;
+import org.elasticsearch.TransportVersions;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
 import org.elasticsearch.xcontent.ObjectParser;
@@ -146,6 +148,11 @@ public class PassThroughConfigUpdate extends NlpConfigUpdate implements NamedXCo
         return Objects.hash(resultsField, tokenizationUpdate);
     }
 
+    @Override
+    public TransportVersion getMinimalSupportedVersion() {
+        return TransportVersions.V_8_0_0;
+    }
+
     public static class Builder implements InferenceConfigUpdate.Builder<PassThroughConfigUpdate.Builder, PassThroughConfigUpdate> {
         private String resultsField;
         private TokenizationUpdate tokenizationUpdate;
@@ -161,6 +168,7 @@ public class PassThroughConfigUpdate extends NlpConfigUpdate implements NamedXCo
             return this;
         }
 
+        @Override
         public PassThroughConfigUpdate build() {
             return new PassThroughConfigUpdate(this.resultsField, tokenizationUpdate);
         }

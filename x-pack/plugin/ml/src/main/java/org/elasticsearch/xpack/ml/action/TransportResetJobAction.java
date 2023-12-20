@@ -9,7 +9,6 @@ package org.elasticsearch.xpack.ml.action;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-import org.apache.logging.log4j.message.ParameterizedMessage;
 import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.action.admin.cluster.node.tasks.get.GetTaskAction;
 import org.elasticsearch.action.admin.cluster.node.tasks.get.GetTaskRequest;
@@ -25,6 +24,7 @@ import org.elasticsearch.cluster.metadata.IndexNameExpressionResolver;
 import org.elasticsearch.cluster.service.ClusterService;
 import org.elasticsearch.common.bytes.BytesReference;
 import org.elasticsearch.common.inject.Inject;
+import org.elasticsearch.common.util.concurrent.EsExecutors;
 import org.elasticsearch.core.CheckedConsumer;
 import org.elasticsearch.persistent.PersistentTasksCustomMetadata;
 import org.elasticsearch.tasks.CancellableTask;
@@ -48,6 +48,7 @@ import org.elasticsearch.xpack.ml.notifications.AnomalyDetectionAuditor;
 
 import java.util.Objects;
 
+import static org.elasticsearch.core.Strings.format;
 import static org.elasticsearch.xpack.core.ClientHelper.ML_ORIGIN;
 import static org.elasticsearch.xpack.core.ClientHelper.executeAsyncWithOrigin;
 
@@ -80,7 +81,7 @@ public class TransportResetJobAction extends AcknowledgedTransportMasterNodeActi
             actionFilters,
             ResetJobAction.Request::new,
             indexNameExpressionResolver,
-            ThreadPool.Names.SAME
+            EsExecutors.DIRECT_EXECUTOR_SERVICE
         );
         this.client = Objects.requireNonNull(client);
         this.jobConfigProvider = Objects.requireNonNull(jobConfigProvider);
@@ -135,7 +136,7 @@ public class TransportResetJobAction extends AcknowledgedTransportMasterNodeActi
             }
         }, listener::onFailure);
 
-        jobConfigProvider.getJob(request.getJobId(), jobListener);
+        jobConfigProvider.getJob(request.getJobId(), null, jobListener);
     }
 
     private void waitExistingResetTaskToComplete(
@@ -143,7 +144,7 @@ public class TransportResetJobAction extends AcknowledgedTransportMasterNodeActi
         ResetJobAction.Request request,
         ActionListener<AcknowledgedResponse> listener
     ) {
-        logger.debug(() -> new ParameterizedMessage("[{}] Waiting on existing reset task: {}", request.getJobId(), existingTaskId));
+        logger.debug(() -> format("[%s] Waiting on existing reset task: %s", request.getJobId(), existingTaskId));
         GetTaskRequest getTaskRequest = new GetTaskRequest();
         getTaskRequest.setTaskId(existingTaskId);
         getTaskRequest.setWaitForCompletion(true);
@@ -168,14 +169,12 @@ public class TransportResetJobAction extends AcknowledgedTransportMasterNodeActi
             Job job = jobResponse.build();
             if (job.getBlocked().getReason() == Blocked.Reason.NONE) {
                 // This means the previous reset task finished successfully as it managed to unset the blocked reason.
-                logger.debug(() -> new ParameterizedMessage("[{}] Existing reset task finished successfully", request.getJobId()));
+                logger.debug(() -> "[" + request.getJobId() + "] Existing reset task finished successfully");
                 listener.onResponse(AcknowledgedResponse.TRUE);
             } else if (job.getBlocked().getReason() == Blocked.Reason.RESET) {
                 // Seems like the task was removed abruptly as it hasn't unset the block on reset.
                 // Let us try reset again.
-                logger.debug(
-                    () -> new ParameterizedMessage("[{}] Existing reset task was interrupted; retrying reset", request.getJobId())
-                );
+                logger.debug(() -> "[" + request.getJobId() + "] Existing reset task was interrupted; retrying reset");
                 ParentTaskAssigningClient taskClient = new ParentTaskAssigningClient(
                     client,
                     new TaskId(clusterService.localNode().getId(), task.getId())
@@ -192,7 +191,7 @@ public class TransportResetJobAction extends AcknowledgedTransportMasterNodeActi
         }, listener::onFailure);
 
         // Get job again to check if it is still blocked
-        jobConfigProvider.getJob(request.getJobId(), jobListener);
+        jobConfigProvider.getJob(request.getJobId(), null, jobListener);
     }
 
     private void resetJob(
@@ -238,7 +237,7 @@ public class TransportResetJobAction extends AcknowledgedTransportMasterNodeActi
                 listener.onResponse(AcknowledgedResponse.of(false));
                 return;
             }
-            jobConfigProvider.getJob(jobId, ActionListener.wrap(jobBuilder -> {
+            jobConfigProvider.getJob(jobId, null, ActionListener.wrap(jobBuilder -> {
                 if (task.isCancelled()) {
                     listener.onResponse(AcknowledgedResponse.of(false));
                     return;
@@ -247,7 +246,7 @@ public class TransportResetJobAction extends AcknowledgedTransportMasterNodeActi
             }, listener::onFailure));
         };
 
-        JobDataDeleter jobDataDeleter = new JobDataDeleter(taskClient, jobId);
+        JobDataDeleter jobDataDeleter = new JobDataDeleter(taskClient, jobId, request.getDeleteUserAnnotations());
         jobDataDeleter.deleteJobDocuments(
             jobConfigProvider,
             indexNameExpressionResolver,

@@ -15,7 +15,7 @@ import org.elasticsearch.common.io.stream.NamedWriteableRegistry;
 import org.elasticsearch.common.io.stream.Writeable.Reader;
 import org.elasticsearch.common.util.CollectionUtils;
 import org.elasticsearch.core.TimeValue;
-import org.elasticsearch.test.AbstractSerializingTestCase;
+import org.elasticsearch.test.AbstractXContentSerializingTestCase;
 import org.elasticsearch.xcontent.NamedXContentRegistry;
 import org.elasticsearch.xcontent.ParseField;
 import org.elasticsearch.xcontent.ToXContentObject;
@@ -34,14 +34,19 @@ import static org.hamcrest.Matchers.notNullValue;
 import static org.hamcrest.Matchers.nullValue;
 import static org.hamcrest.Matchers.startsWith;
 
-public class IndexLifecycleExplainResponseTests extends AbstractSerializingTestCase<IndexLifecycleExplainResponse> {
+public class IndexLifecycleExplainResponseTests extends AbstractXContentSerializingTestCase<IndexLifecycleExplainResponse> {
 
     static IndexLifecycleExplainResponse randomIndexExplainResponse() {
+        final IndexLifecycleExplainResponse indexLifecycleExplainResponse;
         if (frequently()) {
-            return randomManagedIndexExplainResponse();
+            indexLifecycleExplainResponse = randomManagedIndexExplainResponse();
         } else {
-            return randomUnmanagedIndexExplainResponse();
+            indexLifecycleExplainResponse = randomUnmanagedIndexExplainResponse();
         }
+        long now = System.currentTimeMillis();
+        // So that now is the same for the duration of the test. See #84352
+        indexLifecycleExplainResponse.nowSupplier = () -> now;
+        return indexLifecycleExplainResponse;
     }
 
     private static IndexLifecycleExplainResponse randomUnmanagedIndexExplainResponse() {
@@ -167,7 +172,7 @@ public class IndexLifecycleExplainResponseTests extends AbstractSerializingTestC
     }
 
     @Override
-    protected IndexLifecycleExplainResponse mutateInstance(IndexLifecycleExplainResponse instance) throws IOException {
+    protected IndexLifecycleExplainResponse mutateInstance(IndexLifecycleExplainResponse instance) {
         String index = instance.getIndex();
         Long indexCreationDate = instance.getIndexCreationDate();
         String policy = instance.getPolicyName();
@@ -278,14 +283,11 @@ public class IndexLifecycleExplainResponseTests extends AbstractSerializingTestC
                 phaseExecutionInfo
             );
         } else {
-            switch (between(0, 1)) {
-                case 0:
-                    return IndexLifecycleExplainResponse.newUnmanagedIndexResponse(index + randomAlphaOfLengthBetween(1, 5));
-                case 1:
-                    return randomManagedIndexExplainResponse();
-                default:
-                    throw new AssertionError("Illegal randomisation branch");
-            }
+            return switch (between(0, 1)) {
+                case 0 -> IndexLifecycleExplainResponse.newUnmanagedIndexResponse(index + randomAlphaOfLengthBetween(1, 5));
+                case 1 -> randomManagedIndexExplainResponse();
+                default -> throw new AssertionError("Illegal randomisation branch");
+            };
         }
     }
 

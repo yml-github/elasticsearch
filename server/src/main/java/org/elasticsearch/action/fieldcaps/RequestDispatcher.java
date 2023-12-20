@@ -174,6 +174,8 @@ final class RequestDispatcher {
         final FieldCapabilitiesNodeRequest nodeRequest = new FieldCapabilitiesNodeRequest(
             shardIds,
             fieldCapsRequest.fields(),
+            fieldCapsRequest.filters(),
+            fieldCapsRequest.types(),
             originalIndices,
             fieldCapsRequest.indexFilter(),
             nowInMillis,
@@ -185,7 +187,7 @@ final class RequestDispatcher {
             nodeRequest,
             parentTask,
             TransportRequestOptions.EMPTY,
-            new ActionListenerResponseHandler<>(listener, FieldCapabilitiesNodeResponse::new)
+            new ActionListenerResponseHandler<>(listener, FieldCapabilitiesNodeResponse::new, executor)
         );
     }
 

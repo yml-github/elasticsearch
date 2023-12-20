@@ -27,19 +27,22 @@ import org.elasticsearch.cluster.metadata.IndexAbstraction.ConcreteIndex;
 import org.elasticsearch.cluster.metadata.IndexMetadata;
 import org.elasticsearch.cluster.metadata.Metadata;
 import org.elasticsearch.cluster.node.DiscoveryNode;
-import org.elasticsearch.cluster.node.DiscoveryNodeRole;
+import org.elasticsearch.cluster.node.DiscoveryNodeUtils;
 import org.elasticsearch.cluster.service.ClusterService;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.util.concurrent.EsRejectedExecutionException;
 import org.elasticsearch.core.TimeValue;
 import org.elasticsearch.index.IndexNotFoundException;
+import org.elasticsearch.index.IndexVersion;
+import org.elasticsearch.index.IndexVersions;
 import org.elasticsearch.index.IndexingPressure;
 import org.elasticsearch.index.VersionType;
 import org.elasticsearch.indices.EmptySystemIndices;
-import org.elasticsearch.indices.SystemIndexDescriptor;
+import org.elasticsearch.indices.SystemIndexDescriptorUtils;
 import org.elasticsearch.indices.SystemIndices;
 import org.elasticsearch.test.ESTestCase;
 import org.elasticsearch.test.VersionUtils;
+import org.elasticsearch.test.index.IndexVersionUtils;
 import org.elasticsearch.test.transport.CapturingTransport;
 import org.elasticsearch.threadpool.TestThreadPool;
 import org.elasticsearch.threadpool.ThreadPool;
@@ -49,7 +52,6 @@ import org.junit.Before;
 
 import java.util.Collections;
 import java.util.List;
-import java.util.Map;
 import java.util.SortedMap;
 import java.util.TreeMap;
 import java.util.concurrent.TimeUnit;
@@ -90,7 +92,7 @@ public class TransportBulkActionTests extends ESTestCase {
         }
 
         @Override
-        void createIndex(String index, TimeValue timeout, Version minNodeVersion, ActionListener<CreateIndexResponse> listener) {
+        void createIndex(String index, TimeValue timeout, ActionListener<CreateIndexResponse> listener) {
             indexCreated = true;
             if (beforeIndexCreation != null) {
                 beforeIndexCreation.run();
@@ -107,13 +109,13 @@ public class TransportBulkActionTests extends ESTestCase {
     public void setUp() throws Exception {
         super.setUp();
         threadPool = new TestThreadPool(getClass().getName());
-        DiscoveryNode discoveryNode = new DiscoveryNode(
-            "node",
-            ESTestCase.buildNewFakeTransportAddress(),
-            Collections.emptyMap(),
-            DiscoveryNodeRole.roles(),
-            VersionUtils.randomCompatibleVersion(random(), Version.CURRENT)
-        );
+        DiscoveryNode discoveryNode = DiscoveryNodeUtils.builder("node")
+            .version(
+                VersionUtils.randomCompatibleVersion(random(), Version.CURRENT),
+                IndexVersions.MINIMUM_COMPATIBLE,
+                IndexVersionUtils.randomCompatibleVersion(random())
+            )
+            .build();
         clusterService = createClusterService(threadPool, discoveryNode);
         CapturingTransport capturingTransport = new CapturingTransport();
         transportService = capturingTransport.createTransportService(
@@ -140,7 +142,7 @@ public class TransportBulkActionTests extends ESTestCase {
     public void testDeleteNonExistingDocDoesNotCreateIndex() throws Exception {
         BulkRequest bulkRequest = new BulkRequest().add(new DeleteRequest("index").id("id"));
 
-        PlainActionFuture<BulkResponse> future = PlainActionFuture.newFuture();
+        PlainActionFuture<BulkResponse> future = new PlainActionFuture<>();
         ActionTestUtils.execute(bulkAction, null, bulkRequest, future);
 
         BulkResponse response = future.actionGet();
@@ -155,7 +157,7 @@ public class TransportBulkActionTests extends ESTestCase {
     public void testDeleteNonExistingDocExternalVersionCreatesIndex() throws Exception {
         BulkRequest bulkRequest = new BulkRequest().add(new DeleteRequest("index").id("id").versionType(VersionType.EXTERNAL).version(0));
 
-        PlainActionFuture<BulkResponse> future = PlainActionFuture.newFuture();
+        PlainActionFuture<BulkResponse> future = new PlainActionFuture<>();
         ActionTestUtils.execute(bulkAction, null, bulkRequest, future);
         future.actionGet();
         assertTrue(bulkAction.indexCreated);
@@ -166,7 +168,7 @@ public class TransportBulkActionTests extends ESTestCase {
             new DeleteRequest("index2").id("id").versionType(VersionType.EXTERNAL_GTE).version(0)
         );
 
-        PlainActionFuture<BulkResponse> future = PlainActionFuture.newFuture();
+        PlainActionFuture<BulkResponse> future = new PlainActionFuture<>();
         ActionTestUtils.execute(bulkAction, null, bulkRequest, future);
         future.actionGet();
         assertTrue(bulkAction.indexCreated);
@@ -281,7 +283,7 @@ public class TransportBulkActionTests extends ESTestCase {
 
     public void testOnlySystem() {
         SortedMap<String, IndexAbstraction> indicesLookup = new TreeMap<>();
-        Settings settings = Settings.builder().put("index.version.created", Version.CURRENT).build();
+        Settings settings = Settings.builder().put(IndexMetadata.SETTING_VERSION_CREATED, IndexVersion.current()).build();
         indicesLookup.put(
             ".foo",
             new ConcreteIndex(IndexMetadata.builder(".foo").settings(settings).system(true).numberOfShards(1).numberOfReplicas(0).build())
@@ -291,19 +293,19 @@ public class TransportBulkActionTests extends ESTestCase {
             new ConcreteIndex(IndexMetadata.builder(".bar").settings(settings).system(true).numberOfShards(1).numberOfReplicas(0).build())
         );
         SystemIndices systemIndices = new SystemIndices(
-            Map.of("plugin", new SystemIndices.Feature("plugin", "test feature", List.of(new SystemIndexDescriptor(".test*", ""))))
+            List.of(new SystemIndices.Feature("plugin", "test feature", List.of(SystemIndexDescriptorUtils.createUnmanaged(".test*", ""))))
         );
         List<String> onlySystem = List.of(".foo", ".bar");
-        assertTrue(bulkAction.isOnlySystem(buildBulkRequest(onlySystem), indicesLookup, systemIndices));
+        assertTrue(TransportBulkAction.isOnlySystem(buildBulkRequest(onlySystem), indicesLookup, systemIndices));
 
         onlySystem = List.of(".foo", ".bar", ".test");
-        assertTrue(bulkAction.isOnlySystem(buildBulkRequest(onlySystem), indicesLookup, systemIndices));
+        assertTrue(TransportBulkAction.isOnlySystem(buildBulkRequest(onlySystem), indicesLookup, systemIndices));
 
         List<String> nonSystem = List.of("foo", "bar");
-        assertFalse(bulkAction.isOnlySystem(buildBulkRequest(nonSystem), indicesLookup, systemIndices));
+        assertFalse(TransportBulkAction.isOnlySystem(buildBulkRequest(nonSystem), indicesLookup, systemIndices));
 
         List<String> mixed = List.of(".foo", ".test", "other");
-        assertFalse(bulkAction.isOnlySystem(buildBulkRequest(mixed), indicesLookup, systemIndices));
+        assertFalse(TransportBulkAction.isOnlySystem(buildBulkRequest(mixed), indicesLookup, systemIndices));
     }
 
     public void testRejectCoordination() throws Exception {
@@ -311,7 +313,7 @@ public class TransportBulkActionTests extends ESTestCase {
 
         try {
             threadPool.startForcingRejections();
-            PlainActionFuture<BulkResponse> future = PlainActionFuture.newFuture();
+            PlainActionFuture<BulkResponse> future = new PlainActionFuture<>();
             ActionTestUtils.execute(bulkAction, null, bulkRequest, future);
             expectThrows(EsRejectedExecutionException.class, future::actionGet);
         } finally {
@@ -325,7 +327,7 @@ public class TransportBulkActionTests extends ESTestCase {
         bulkAction.failIndexCreation = randomBoolean();
         try {
             bulkAction.beforeIndexCreation = threadPool::startForcingRejections;
-            PlainActionFuture<BulkResponse> future = PlainActionFuture.newFuture();
+            PlainActionFuture<BulkResponse> future = new PlainActionFuture<>();
             ActionTestUtils.execute(bulkAction, null, bulkRequest, future);
             expectThrows(EsRejectedExecutionException.class, future::actionGet);
             assertTrue(bulkAction.indexCreated);
@@ -337,20 +339,12 @@ public class TransportBulkActionTests extends ESTestCase {
     private BulkRequest buildBulkRequest(List<String> indices) {
         BulkRequest request = new BulkRequest();
         for (String index : indices) {
-            final DocWriteRequest<?> subRequest;
-            switch (randomIntBetween(1, 3)) {
-                case 1:
-                    subRequest = new IndexRequest(index);
-                    break;
-                case 2:
-                    subRequest = new DeleteRequest(index).id("0");
-                    break;
-                case 3:
-                    subRequest = new UpdateRequest(index, "0");
-                    break;
-                default:
-                    throw new IllegalStateException("only have 3 cases");
-            }
+            final DocWriteRequest<?> subRequest = switch (randomIntBetween(1, 3)) {
+                case 1 -> new IndexRequest(index);
+                case 2 -> new DeleteRequest(index).id("0");
+                case 3 -> new UpdateRequest(index, "0");
+                default -> throw new IllegalStateException("only have 3 cases");
+            };
             request.add(subRequest);
         }
         return request;

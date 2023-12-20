@@ -9,7 +9,6 @@ package org.elasticsearch.xpack.ilm.action;
 
 import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.action.support.ActionFilters;
-import org.elasticsearch.action.support.master.AcknowledgedResponse;
 import org.elasticsearch.cluster.AckedClusterStateUpdateTask;
 import org.elasticsearch.cluster.ClusterState;
 import org.elasticsearch.cluster.metadata.IndexNameExpressionResolver;
@@ -18,6 +17,7 @@ import org.elasticsearch.common.Priority;
 import org.elasticsearch.tasks.Task;
 import org.elasticsearch.tasks.TaskId;
 import org.elasticsearch.test.ESTestCase;
+import org.elasticsearch.test.MockUtils;
 import org.elasticsearch.threadpool.ThreadPool;
 import org.elasticsearch.transport.TransportService;
 import org.elasticsearch.xpack.core.ilm.StopILMRequest;
@@ -32,25 +32,15 @@ import static org.mockito.Mockito.verify;
 
 public class TransportStopILMActionTests extends ESTestCase {
 
-    private static final ActionListener<AcknowledgedResponse> EMPTY_LISTENER = new ActionListener<>() {
-        @Override
-        public void onResponse(AcknowledgedResponse response) {
-
-        }
-
-        @Override
-        public void onFailure(Exception e) {
-
-        }
-    };
-
     public void testStopILMClusterStatePriorityIsImmediate() {
         ClusterService clusterService = mock(ClusterService.class);
 
+        ThreadPool threadPool = mock(ThreadPool.class);
+        TransportService transportService = MockUtils.setupTransportServiceWithThreadpoolExecutor(threadPool);
         TransportStopILMAction transportStopILMAction = new TransportStopILMAction(
-            mock(TransportService.class),
+            transportService,
             clusterService,
-            mock(ThreadPool.class),
+            threadPool,
             mock(ActionFilters.class),
             mock(IndexNameExpressionResolver.class)
         );
@@ -63,9 +53,9 @@ public class TransportStopILMActionTests extends ESTestCase {
             emptyMap()
         );
         StopILMRequest request = new StopILMRequest();
-        transportStopILMAction.masterOperation(task, request, ClusterState.EMPTY_STATE, EMPTY_LISTENER);
+        transportStopILMAction.masterOperation(task, request, ClusterState.EMPTY_STATE, ActionListener.noop());
 
-        verify(clusterService).submitStateUpdateTask(
+        verify(clusterService).submitUnbatchedStateUpdateTask(
             eq("ilm_operation_mode_update[stopping]"),
             argThat(new ArgumentMatcher<AckedClusterStateUpdateTask>() {
 

@@ -71,7 +71,7 @@ public class PrimaryReplicaSyncerTests extends IndexShardTestCase {
             listener.onResponse(new ResyncReplicationResponse());
         };
         PrimaryReplicaSyncer syncer = new PrimaryReplicaSyncer(transportService, syncAction);
-        syncer.setChunkSize(new ByteSizeValue(randomIntBetween(1, 10)));
+        syncer.setChunkSize(ByteSizeValue.ofBytes(randomIntBetween(1, 10)));
 
         int numDocs = randomInt(10);
         for (int i = 0; i < numDocs; i++) {
@@ -161,7 +161,7 @@ public class PrimaryReplicaSyncerTests extends IndexShardTestCase {
             emptySet()
         );
         PrimaryReplicaSyncer syncer = new PrimaryReplicaSyncer(transportService, syncAction);
-        syncer.setChunkSize(new ByteSizeValue(1)); // every document is sent off separately
+        syncer.setChunkSize(ByteSizeValue.ofBytes(1)); // every document is sent off separately
 
         int numDocs = 10;
         for (int i = 0; i < numDocs; i++) {
@@ -274,18 +274,10 @@ public class PrimaryReplicaSyncerTests extends IndexShardTestCase {
         assertEquals(status.hashCode(), sameStatus.hashCode());
 
         switch (randomInt(3)) {
-            case 0:
-                task.setPhase("otherPhase");
-                break;
-            case 1:
-                task.setResyncedOperations(task.getResyncedOperations() + 1);
-                break;
-            case 2:
-                task.setSkippedOperations(task.getSkippedOperations() + 1);
-                break;
-            case 3:
-                task.setTotalOperations(task.getTotalOperations() + 1);
-                break;
+            case 0 -> task.setPhase("otherPhase");
+            case 1 -> task.setResyncedOperations(task.getResyncedOperations() + 1);
+            case 2 -> task.setSkippedOperations(task.getSkippedOperations() + 1);
+            case 3 -> task.setTotalOperations(task.getTotalOperations() + 1);
         }
 
         PrimaryReplicaSyncer.ResyncTask.Status differentStatus = task.getStatus();

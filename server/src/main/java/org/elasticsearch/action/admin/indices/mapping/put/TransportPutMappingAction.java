@@ -10,7 +10,6 @@ package org.elasticsearch.action.admin.indices.mapping.put;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-import org.apache.logging.log4j.message.ParameterizedMessage;
 import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.action.RequestValidators;
 import org.elasticsearch.action.support.ActionFilters;
@@ -24,6 +23,7 @@ import org.elasticsearch.cluster.metadata.MetadataMappingService;
 import org.elasticsearch.cluster.service.ClusterService;
 import org.elasticsearch.common.Strings;
 import org.elasticsearch.common.inject.Inject;
+import org.elasticsearch.common.util.concurrent.EsExecutors;
 import org.elasticsearch.index.Index;
 import org.elasticsearch.index.IndexNotFoundException;
 import org.elasticsearch.indices.SystemIndexDescriptor;
@@ -69,7 +69,7 @@ public class TransportPutMappingAction extends AcknowledgedTransportMasterNodeAc
             actionFilters,
             PutMappingRequest::new,
             indexNameExpressionResolver,
-            ThreadPool.Names.SAME
+            EsExecutors.DIRECT_EXECUTOR_SERVICE
         );
         this.metadataMappingService = metadataMappingService;
         this.requestValidators = Objects.requireNonNull(requestValidators);
@@ -112,7 +112,7 @@ public class TransportPutMappingAction extends AcknowledgedTransportMasterNodeAc
 
             performMappingUpdate(concreteIndices, request, listener, metadataMappingService);
         } catch (IndexNotFoundException ex) {
-            logger.debug(() -> new ParameterizedMessage("failed to put mappings on indices [{}]", Arrays.asList(request.indices())), ex);
+            logger.debug(() -> "failed to put mappings on indices [" + Arrays.asList(request.indices() + "]"), ex);
             throw ex;
         }
     }
@@ -148,7 +148,7 @@ public class TransportPutMappingAction extends AcknowledgedTransportMasterNodeAc
         MetadataMappingService metadataMappingService
     ) {
         final ActionListener<AcknowledgedResponse> wrappedListener = listener.delegateResponse((l, e) -> {
-            logger.debug(() -> new ParameterizedMessage("failed to put mappings on indices [{}]", Arrays.asList(concreteIndices)), e);
+            logger.debug(() -> "failed to put mappings on indices [" + Arrays.asList(concreteIndices) + "]", e);
             l.onFailure(e);
         });
         final PutMappingClusterStateUpdateRequest updateRequest;

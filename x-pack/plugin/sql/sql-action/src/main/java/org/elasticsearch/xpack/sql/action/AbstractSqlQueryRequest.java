@@ -6,6 +6,8 @@
  */
 package org.elasticsearch.xpack.sql.action;
 
+import org.elasticsearch.Build;
+import org.elasticsearch.TransportVersions;
 import org.elasticsearch.Version;
 import org.elasticsearch.action.ActionRequestValidationException;
 import org.elasticsearch.action.CompositeIndicesRequest;
@@ -17,10 +19,10 @@ import org.elasticsearch.core.TimeValue;
 import org.elasticsearch.index.query.AbstractQueryBuilder;
 import org.elasticsearch.index.query.QueryBuilder;
 import org.elasticsearch.search.builder.SearchSourceBuilder;
+import org.elasticsearch.xcontent.ConstructingObjectParser;
 import org.elasticsearch.xcontent.ObjectParser;
 import org.elasticsearch.xcontent.ObjectParser.ValueType;
 import org.elasticsearch.xcontent.ParseField;
-import org.elasticsearch.xcontent.ToXContentFragment;
 import org.elasticsearch.xcontent.XContentLocation;
 import org.elasticsearch.xcontent.XContentParseException;
 import org.elasticsearch.xcontent.XContentParser;
@@ -40,8 +42,12 @@ import java.util.function.Supplier;
 
 import static java.util.Collections.emptyList;
 import static java.util.Collections.emptyMap;
-import static org.elasticsearch.Version.CURRENT;
 import static org.elasticsearch.action.ValidateActions.addValidationError;
+import static org.elasticsearch.common.xcontent.XContentParserUtils.parseFieldsValue;
+import static org.elasticsearch.xcontent.ConstructingObjectParser.constructorArg;
+import static org.elasticsearch.xcontent.ObjectParser.ValueType.VALUE_ARRAY;
+import static org.elasticsearch.xpack.sql.action.ProtoShim.fromProto;
+import static org.elasticsearch.xpack.sql.action.ProtoShim.toProto;
 import static org.elasticsearch.xpack.sql.action.Protocol.CATALOG_NAME;
 import static org.elasticsearch.xpack.sql.action.Protocol.CLIENT_ID_NAME;
 import static org.elasticsearch.xpack.sql.action.Protocol.CURSOR_NAME;
@@ -58,7 +64,24 @@ import static org.elasticsearch.xpack.sql.action.Protocol.VERSION_NAME;
 /**
  * Base class for requests that contain sql queries (Query and Translate)
  */
-public abstract class AbstractSqlQueryRequest extends AbstractSqlRequest implements CompositeIndicesRequest, ToXContentFragment {
+public abstract class AbstractSqlQueryRequest extends AbstractSqlRequest implements CompositeIndicesRequest {
+
+    //
+    // parser for sql-proto SqlTypedParamValue
+    //
+    private static final ConstructingObjectParser<SqlTypedParamValue, Void> SQL_PARAM_PARSER = new ConstructingObjectParser<>(
+        "params",
+        true,
+        objects -> new SqlTypedParamValue((String) objects[1], objects[0])
+    );
+
+    private static final ParseField VALUE = new ParseField("value");
+    private static final ParseField TYPE = new ParseField("type");
+
+    static {
+        SQL_PARAM_PARSER.declareField(constructorArg(), (p, c) -> parseFieldsValue(p), VALUE, ValueType.VALUE);
+        SQL_PARAM_PARSER.declareString(constructorArg(), TYPE);
+    }
 
     private String query = "";
     private ZoneId zoneId = Protocol.TIME_ZONE;
@@ -120,7 +143,7 @@ public abstract class AbstractSqlQueryRequest extends AbstractSqlRequest impleme
         parser.declareString((request, mode) -> request.mode(Mode.fromString(mode)), MODE);
         parser.declareString(AbstractSqlRequest::clientId, CLIENT_ID);
         parser.declareString(AbstractSqlRequest::version, VERSION);
-        parser.declareField(AbstractSqlQueryRequest::params, AbstractSqlQueryRequest::parseParams, PARAMS, ValueType.VALUE_ARRAY);
+        parser.declareField(AbstractSqlQueryRequest::params, AbstractSqlQueryRequest::parseParams, PARAMS, VALUE_ARRAY);
         parser.declareString((request, zoneId) -> request.zoneId(ZoneId.of(zoneId)), TIME_ZONE);
         parser.declareString(AbstractSqlQueryRequest::catalog, CATALOG);
         parser.declareInt(AbstractSqlQueryRequest::fetchSize, FETCH_SIZE);
@@ -132,7 +155,7 @@ public abstract class AbstractSqlQueryRequest extends AbstractSqlRequest impleme
             (request, timeout) -> request.pageTimeout(TimeValue.parseTimeValue(timeout, Protocol.PAGE_TIMEOUT, PAGE_TIMEOUT_NAME)),
             PAGE_TIMEOUT
         );
-        parser.declareObject(AbstractSqlQueryRequest::filter, (p, c) -> AbstractQueryBuilder.parseInnerQueryBuilder(p), FILTER);
+        parser.declareObject(AbstractSqlQueryRequest::filter, (p, c) -> AbstractQueryBuilder.parseTopLevelQuery(p), FILTER);
         parser.declareObject(AbstractSqlQueryRequest::runtimeMappings, (p, c) -> p.map(), SearchSourceBuilder.RUNTIME_MAPPINGS_FIELD);
         return parser;
     }
@@ -182,7 +205,7 @@ public abstract class AbstractSqlQueryRequest extends AbstractSqlRequest impleme
 
                 if (token == Token.START_OBJECT) {
                     // we are at the start of a value/type pair... hopefully
-                    currentParam = SqlTypedParamValue.fromXContent(p);
+                    currentParam = SQL_PARAM_PARSER.apply(p, null);
                     /*
                      * Always set the xcontentlocation for the first param just in case the first one happens to not meet the parsing rules
                      * that are checked later in validateParams method.
@@ -190,7 +213,7 @@ public abstract class AbstractSqlQueryRequest extends AbstractSqlRequest impleme
                      * its type being explicitly set or inferred.
                      */
                     if ((previousParam != null && previousParam.hasExplicitType() == false) || result.isEmpty()) {
-                        currentParam.tokenLocation(loc);
+                        currentParam.tokenLocation(toProto(loc));
                     }
                 } else {
                     if (token == Token.VALUE_STRING) {
@@ -223,7 +246,7 @@ public abstract class AbstractSqlQueryRequest extends AbstractSqlRequest impleme
 
                     currentParam = new SqlTypedParamValue(type, value, false);
                     if ((previousParam != null && previousParam.hasExplicitType()) || result.isEmpty()) {
-                        currentParam.tokenLocation(loc);
+                        currentParam.tokenLocation(toProto(loc));
                     }
                 }
 
@@ -239,13 +262,13 @@ public abstract class AbstractSqlQueryRequest extends AbstractSqlRequest impleme
         for (SqlTypedParamValue param : params) {
             if (Mode.isDriver(mode) && param.hasExplicitType() == false) {
                 throw new XContentParseException(
-                    param.tokenLocation(),
+                    fromProto(param.tokenLocation()),
                     "[params] must be an array where each entry is an object with a " + "value/type pair"
                 );
             }
             if (Mode.isDriver(mode) == false && param.hasExplicitType()) {
                 throw new XContentParseException(
-                    param.tokenLocation(),
+                    fromProto(param.tokenLocation()),
                     "[params] must be an array where each entry is a single field (no " + "objects supported)"
                 );
             }
@@ -265,7 +288,7 @@ public abstract class AbstractSqlQueryRequest extends AbstractSqlRequest impleme
                         validationException
                     );
                 }
-            } else if (SqlVersion.isClientCompatible(SqlVersion.fromId(CURRENT.id), requestInfo().version()) == false) {
+            } else if (SqlVersion.isClientCompatible(SqlVersion.fromId(Version.CURRENT.id), requestInfo().version()) == false) {
                 validationException = addValidationError(
                     "The ["
                         + requestInfo().version()
@@ -273,7 +296,7 @@ public abstract class AbstractSqlQueryRequest extends AbstractSqlRequest impleme
                         + mode.toString()
                         + "] "
                         + "client is not compatible with Elasticsearch version ["
-                        + CURRENT
+                        + Build.current().version()
                         + "]",
                     validationException
                 );
@@ -405,16 +428,16 @@ public abstract class AbstractSqlQueryRequest extends AbstractSqlRequest impleme
     public AbstractSqlQueryRequest(StreamInput in) throws IOException {
         super(in);
         query = in.readString();
-        params = in.readList(AbstractSqlQueryRequest::readSqlTypedParamValue);
+        params = in.readCollectionAsList(AbstractSqlQueryRequest::readSqlTypedParamValue);
         zoneId = in.readZoneId();
-        if (in.getVersion().onOrAfter(Version.V_7_16_0)) {
+        if (in.getTransportVersion().onOrAfter(TransportVersions.V_7_16_0)) {
             catalog = in.readOptionalString();
         }
         fetchSize = in.readVInt();
         requestTimeout = in.readTimeValue();
         pageTimeout = in.readTimeValue();
         filter = in.readOptionalNamedWriteable(QueryBuilder.class);
-        if (in.getVersion().onOrAfter(Version.V_7_13_0)) {
+        if (in.getTransportVersion().onOrAfter(TransportVersions.V_7_13_0)) {
             runtimeMappings = in.readMap();
         }
     }
@@ -433,20 +456,17 @@ public abstract class AbstractSqlQueryRequest extends AbstractSqlRequest impleme
     public void writeTo(StreamOutput out) throws IOException {
         super.writeTo(out);
         out.writeString(query);
-        out.writeVInt(params.size());
-        for (SqlTypedParamValue param : params) {
-            writeSqlTypedParamValue(out, param);
-        }
+        out.writeCollection(params, AbstractSqlQueryRequest::writeSqlTypedParamValue);
         out.writeZoneId(zoneId);
-        if (out.getVersion().onOrAfter(Version.V_7_16_0)) {
+        if (out.getTransportVersion().onOrAfter(TransportVersions.V_7_16_0)) {
             out.writeOptionalString(catalog);
         }
         out.writeVInt(fetchSize);
         out.writeTimeValue(requestTimeout);
         out.writeTimeValue(pageTimeout);
         out.writeOptionalNamedWriteable(filter);
-        if (out.getVersion().onOrAfter(Version.V_7_13_0)) {
-            out.writeMap(runtimeMappings);
+        if (out.getTransportVersion().onOrAfter(TransportVersions.V_7_13_0)) {
+            out.writeGenericMap(runtimeMappings);
         }
     }
 

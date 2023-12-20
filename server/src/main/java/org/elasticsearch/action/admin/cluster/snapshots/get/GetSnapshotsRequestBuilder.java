@@ -25,8 +25,8 @@ public class GetSnapshotsRequestBuilder extends MasterNodeOperationRequestBuilde
     /**
      * Constructs the new get snapshot request with specified repositories
      */
-    public GetSnapshotsRequestBuilder(ElasticsearchClient client, GetSnapshotsAction action, String... repositories) {
-        super(client, action, new GetSnapshotsRequest(repositories));
+    public GetSnapshotsRequestBuilder(ElasticsearchClient client, String... repositories) {
+        super(client, GetSnapshotsAction.INSTANCE, new GetSnapshotsRequest(repositories));
     }
 
     /**
@@ -140,6 +140,12 @@ public class GetSnapshotsRequestBuilder extends MasterNodeOperationRequestBuilde
     public GetSnapshotsRequestBuilder setOrder(SortOrder order) {
         request.order(order);
         return this;
+    }
+
+    public GetSnapshotsRequestBuilder setIncludeIndexNames(boolean indices) {
+        request.includeIndexNames(indices);
+        return this;
+
     }
 
 }

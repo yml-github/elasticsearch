@@ -40,16 +40,4 @@ public enum LicensesStatus {
         return this.name().toLowerCase(Locale.ROOT);
     }
 
-    public static LicensesStatus fromString(String value) {
-        switch (value) {
-            case "valid":
-                return VALID;
-            case "invalid":
-                return INVALID;
-            case "expired":
-                return EXPIRED;
-            default:
-                throw new IllegalArgumentException("unknown licenses status [" + value + "]");
-        }
-    }
 }

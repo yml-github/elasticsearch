@@ -10,18 +10,20 @@ package org.elasticsearch.threadpool;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-import org.apache.logging.log4j.message.ParameterizedMessage;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
 import org.elasticsearch.common.io.stream.Writeable;
 import org.elasticsearch.common.settings.Setting;
 import org.elasticsearch.common.settings.Settings;
+import org.elasticsearch.common.unit.ByteSizeUnit;
+import org.elasticsearch.common.unit.ByteSizeValue;
 import org.elasticsearch.common.unit.SizeValue;
 import org.elasticsearch.common.util.concurrent.EsExecutors;
+import org.elasticsearch.common.util.concurrent.EsExecutors.TaskTrackingConfig;
 import org.elasticsearch.common.util.concurrent.EsRejectedExecutionException;
+import org.elasticsearch.common.util.concurrent.EsRejectedExecutionHandler;
 import org.elasticsearch.common.util.concurrent.EsThreadPoolExecutor;
 import org.elasticsearch.common.util.concurrent.ThreadContext;
-import org.elasticsearch.common.util.concurrent.XRejectedExecutionHandler;
 import org.elasticsearch.core.Nullable;
 import org.elasticsearch.core.TimeValue;
 import org.elasticsearch.node.Node;
@@ -48,8 +50,8 @@ import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
-import static java.util.Collections.unmodifiableMap;
 import static java.util.Map.entry;
+import static org.elasticsearch.core.Strings.format;
 
 public class ThreadPool implements ReportingService<ThreadPoolInfo>, Scheduler {
 
@@ -58,10 +60,12 @@ public class ThreadPool implements ReportingService<ThreadPoolInfo>, Scheduler {
     public static class Names {
         public static final String SAME = "same";
         public static final String GENERIC = "generic";
+        public static final String CLUSTER_COORDINATION = "cluster_coordination";
         public static final String GET = "get";
         public static final String ANALYZE = "analyze";
         public static final String WRITE = "write";
         public static final String SEARCH = "search";
+        public static final String SEARCH_WORKER = "search_worker";
         public static final String SEARCH_COORDINATION = "search_coordination";
         public static final String AUTO_COMPLETE = "auto_complete";
         public static final String SEARCH_THROTTLED = "search_throttled";
@@ -115,6 +119,7 @@ public class ThreadPool implements ReportingService<ThreadPoolInfo>, Scheduler {
         entry(Names.ANALYZE, ThreadPoolType.FIXED),
         entry(Names.WRITE, ThreadPoolType.FIXED),
         entry(Names.SEARCH, ThreadPoolType.FIXED),
+        entry(Names.SEARCH_WORKER, ThreadPoolType.FIXED),
         entry(Names.SEARCH_COORDINATION, ThreadPoolType.FIXED),
         entry(Names.MANAGEMENT, ThreadPoolType.SCALING),
         entry(Names.FLUSH, ThreadPoolType.SCALING),
@@ -179,50 +184,101 @@ public class ThreadPool implements ReportingService<ThreadPoolInfo>, Scheduler {
 
         final Map<String, ExecutorBuilder> builders = new HashMap<>();
         final int allocatedProcessors = EsExecutors.allocatedProcessors(settings);
+        final int halfProc = halfAllocatedProcessors(allocatedProcessors);
         final int halfProcMaxAt5 = halfAllocatedProcessorsMaxFive(allocatedProcessors);
         final int halfProcMaxAt10 = halfAllocatedProcessorsMaxTen(allocatedProcessors);
         final int genericThreadPoolMax = boundedBy(4 * allocatedProcessors, 128, 512);
-        builders.put(Names.GENERIC, new ScalingExecutorBuilder(Names.GENERIC, 4, genericThreadPoolMax, TimeValue.timeValueSeconds(30)));
-        builders.put(Names.WRITE, new FixedExecutorBuilder(settings, Names.WRITE, allocatedProcessors, 10000, false));
-        builders.put(Names.GET, new FixedExecutorBuilder(settings, Names.GET, allocatedProcessors, 1000, false));
-        builders.put(Names.ANALYZE, new FixedExecutorBuilder(settings, Names.ANALYZE, 1, 16, false));
-        builders.put(Names.SEARCH, new FixedExecutorBuilder(settings, Names.SEARCH, searchThreadPoolSize(allocatedProcessors), 1000, true));
-        builders.put(Names.SEARCH_COORDINATION, new FixedExecutorBuilder(settings, Names.SEARCH_COORDINATION, halfProcMaxAt5, 1000, true));
+
+        builders.put(
+            Names.GENERIC,
+            new ScalingExecutorBuilder(Names.GENERIC, 4, genericThreadPoolMax, TimeValue.timeValueSeconds(30), false)
+        );
+        builders.put(
+            Names.WRITE,
+            new FixedExecutorBuilder(settings, Names.WRITE, allocatedProcessors, 10000, new TaskTrackingConfig(true, 0.1))
+        );
+        int searchOrGetThreadPoolSize = searchOrGetThreadPoolSize(allocatedProcessors);
+        builders.put(
+            Names.GET,
+            new FixedExecutorBuilder(settings, Names.GET, searchOrGetThreadPoolSize, 1000, TaskTrackingConfig.DO_NOT_TRACK)
+        );
+        builders.put(Names.ANALYZE, new FixedExecutorBuilder(settings, Names.ANALYZE, 1, 16, TaskTrackingConfig.DO_NOT_TRACK));
+        builders.put(
+            Names.SEARCH,
+            new FixedExecutorBuilder(settings, Names.SEARCH, searchOrGetThreadPoolSize, 1000, TaskTrackingConfig.DEFAULT)
+        );
+        builders.put(
+            Names.SEARCH_WORKER,
+            new FixedExecutorBuilder(settings, Names.SEARCH_WORKER, searchOrGetThreadPoolSize, -1, TaskTrackingConfig.DEFAULT)
+        );
+        builders.put(
+            Names.SEARCH_COORDINATION,
+            new FixedExecutorBuilder(settings, Names.SEARCH_COORDINATION, halfProc, 1000, TaskTrackingConfig.DEFAULT)
+        );
         builders.put(
             Names.AUTO_COMPLETE,
-            new FixedExecutorBuilder(settings, Names.AUTO_COMPLETE, Math.max(allocatedProcessors / 4, 1), 100, true)
+            new FixedExecutorBuilder(settings, Names.AUTO_COMPLETE, Math.max(allocatedProcessors / 4, 1), 100, TaskTrackingConfig.DEFAULT)
         );
-        builders.put(Names.SEARCH_THROTTLED, new FixedExecutorBuilder(settings, Names.SEARCH_THROTTLED, 1, 100, true));
+        builders.put(
+            Names.SEARCH_THROTTLED,
+            new FixedExecutorBuilder(settings, Names.SEARCH_THROTTLED, 1, 100, TaskTrackingConfig.DEFAULT)
+        );
         builders.put(
             Names.MANAGEMENT,
-            new ScalingExecutorBuilder(Names.MANAGEMENT, 1, boundedBy(allocatedProcessors, 1, 5), TimeValue.timeValueMinutes(5))
+            new ScalingExecutorBuilder(Names.MANAGEMENT, 1, boundedBy(allocatedProcessors, 1, 5), TimeValue.timeValueMinutes(5), false)
         );
-        builders.put(Names.FLUSH, new ScalingExecutorBuilder(Names.FLUSH, 1, halfProcMaxAt5, TimeValue.timeValueMinutes(5)));
-        builders.put(Names.REFRESH, new ScalingExecutorBuilder(Names.REFRESH, 1, halfProcMaxAt10, TimeValue.timeValueMinutes(5)));
-        builders.put(Names.WARMER, new ScalingExecutorBuilder(Names.WARMER, 1, halfProcMaxAt5, TimeValue.timeValueMinutes(5)));
-        builders.put(Names.SNAPSHOT, new ScalingExecutorBuilder(Names.SNAPSHOT, 1, halfProcMaxAt5, TimeValue.timeValueMinutes(5)));
+        builders.put(Names.FLUSH, new ScalingExecutorBuilder(Names.FLUSH, 1, halfProcMaxAt5, TimeValue.timeValueMinutes(5), false));
+        builders.put(Names.REFRESH, new ScalingExecutorBuilder(Names.REFRESH, 1, halfProcMaxAt10, TimeValue.timeValueMinutes(5), false));
+        builders.put(Names.WARMER, new ScalingExecutorBuilder(Names.WARMER, 1, halfProcMaxAt5, TimeValue.timeValueMinutes(5), false));
+        final int maxSnapshotCores = getMaxSnapshotThreadPoolSize(allocatedProcessors);
+        builders.put(Names.SNAPSHOT, new ScalingExecutorBuilder(Names.SNAPSHOT, 1, maxSnapshotCores, TimeValue.timeValueMinutes(5), false));
         builders.put(
             Names.SNAPSHOT_META,
-            new ScalingExecutorBuilder(Names.SNAPSHOT_META, 1, Math.min(allocatedProcessors * 3, 50), TimeValue.timeValueSeconds(30L))
+            new ScalingExecutorBuilder(
+                Names.SNAPSHOT_META,
+                1,
+                Math.min(allocatedProcessors * 3, 50),
+                TimeValue.timeValueSeconds(30L),
+                false
+            )
         );
         builders.put(
             Names.FETCH_SHARD_STARTED,
-            new ScalingExecutorBuilder(Names.FETCH_SHARD_STARTED, 1, 2 * allocatedProcessors, TimeValue.timeValueMinutes(5))
+            new ScalingExecutorBuilder(Names.FETCH_SHARD_STARTED, 1, 2 * allocatedProcessors, TimeValue.timeValueMinutes(5), false)
         );
-        builders.put(Names.FORCE_MERGE, new FixedExecutorBuilder(settings, Names.FORCE_MERGE, 1, -1, false));
+        builders.put(
+            Names.FORCE_MERGE,
+            new FixedExecutorBuilder(
+                settings,
+                Names.FORCE_MERGE,
+                oneEighthAllocatedProcessors(allocatedProcessors),
+                -1,
+                TaskTrackingConfig.DO_NOT_TRACK
+            )
+        );
+        builders.put(
+            Names.CLUSTER_COORDINATION,
+            new FixedExecutorBuilder(settings, Names.CLUSTER_COORDINATION, 1, -1, TaskTrackingConfig.DO_NOT_TRACK)
+        );
         builders.put(
             Names.FETCH_SHARD_STORE,
-            new ScalingExecutorBuilder(Names.FETCH_SHARD_STORE, 1, 2 * allocatedProcessors, TimeValue.timeValueMinutes(5))
+            new ScalingExecutorBuilder(Names.FETCH_SHARD_STORE, 1, 2 * allocatedProcessors, TimeValue.timeValueMinutes(5), false)
         );
-        builders.put(Names.SYSTEM_READ, new FixedExecutorBuilder(settings, Names.SYSTEM_READ, halfProcMaxAt5, 2000, false));
-        builders.put(Names.SYSTEM_WRITE, new FixedExecutorBuilder(settings, Names.SYSTEM_WRITE, halfProcMaxAt5, 1000, false));
+        builders.put(
+            Names.SYSTEM_READ,
+            new FixedExecutorBuilder(settings, Names.SYSTEM_READ, halfProcMaxAt5, 2000, TaskTrackingConfig.DO_NOT_TRACK)
+        );
+        builders.put(
+            Names.SYSTEM_WRITE,
+            new FixedExecutorBuilder(settings, Names.SYSTEM_WRITE, halfProcMaxAt5, 1000, new TaskTrackingConfig(true, 0.1))
+        );
         builders.put(
             Names.SYSTEM_CRITICAL_READ,
-            new FixedExecutorBuilder(settings, Names.SYSTEM_CRITICAL_READ, halfProcMaxAt5, 2000, false)
+            new FixedExecutorBuilder(settings, Names.SYSTEM_CRITICAL_READ, halfProcMaxAt5, 2000, TaskTrackingConfig.DO_NOT_TRACK)
         );
         builders.put(
             Names.SYSTEM_CRITICAL_WRITE,
-            new FixedExecutorBuilder(settings, Names.SYSTEM_CRITICAL_WRITE, halfProcMaxAt5, 1500, false)
+            new FixedExecutorBuilder(settings, Names.SYSTEM_CRITICAL_WRITE, halfProcMaxAt5, 1500, new TaskTrackingConfig(true, 0.1))
         );
 
         for (final ExecutorBuilder<?> builder : customBuilders) {
@@ -247,13 +303,13 @@ public class ThreadPool implements ReportingService<ThreadPoolInfo>, Scheduler {
         }
 
         executors.put(Names.SAME, new ExecutorHolder(EsExecutors.DIRECT_EXECUTOR_SERVICE, new Info(Names.SAME, ThreadPoolType.DIRECT)));
-        this.executors = unmodifiableMap(executors);
+        this.executors = Map.copyOf(executors);
 
         final List<Info> infos = executors.values()
             .stream()
             .filter(holder -> holder.info.getName().equals("same") == false)
             .map(holder -> holder.info)
-            .collect(Collectors.toList());
+            .toList();
         this.threadPoolInfo = new ThreadPoolInfo(infos);
         this.scheduler = Scheduler.initScheduler(settings, "scheduler");
         this.slowSchedulerWarnThresholdNanos = SLOW_SCHEDULER_TASK_WARN_THRESHOLD_SETTING.get(settings).nanos();
@@ -263,6 +319,17 @@ public class ThreadPool implements ReportingService<ThreadPoolInfo>, Scheduler {
             LATE_TIME_INTERVAL_WARN_THRESHOLD_SETTING.get(settings).millis()
         );
         this.cachedTimeThread.start();
+    }
+
+    // for subclassing by tests that don't actually use any of the machinery that the regular constructor sets up
+    protected ThreadPool() {
+        this.builders = Map.of();
+        this.executors = Map.of();
+        this.cachedTimeThread = null;
+        this.threadPoolInfo = new ThreadPoolInfo(List.of());
+        this.slowSchedulerWarnThresholdNanos = 0L;
+        this.threadContext = new ThreadContext(Settings.EMPTY);
+        this.scheduler = null;
     }
 
     /**
@@ -337,16 +404,15 @@ public class ThreadPool implements ReportingService<ThreadPoolInfo>, Scheduler {
             long rejected = -1;
             int largest = -1;
             long completed = -1;
-            if (holder.executor() instanceof ThreadPoolExecutor) {
-                ThreadPoolExecutor threadPoolExecutor = (ThreadPoolExecutor) holder.executor();
+            if (holder.executor() instanceof ThreadPoolExecutor threadPoolExecutor) {
                 threads = threadPoolExecutor.getPoolSize();
                 queue = threadPoolExecutor.getQueue().size();
                 active = threadPoolExecutor.getActiveCount();
                 largest = threadPoolExecutor.getLargestPoolSize();
                 completed = threadPoolExecutor.getCompletedTaskCount();
                 RejectedExecutionHandler rejectedExecutionHandler = threadPoolExecutor.getRejectedExecutionHandler();
-                if (rejectedExecutionHandler instanceof XRejectedExecutionHandler) {
-                    rejected = ((XRejectedExecutionHandler) rejectedExecutionHandler).rejected();
+                if (rejectedExecutionHandler instanceof EsRejectedExecutionHandler handler) {
+                    rejected = handler.rejected();
                 }
             }
             stats.add(new ThreadPoolStats.Stats(name, threads, queue, active, rejected, largest, completed));
@@ -380,7 +446,9 @@ public class ThreadPool implements ReportingService<ThreadPoolInfo>, Scheduler {
     public ExecutorService executor(String name) {
         final ExecutorHolder holder = executors.get(name);
         if (holder == null) {
-            throw new IllegalArgumentException("no executor service found for [" + name + "]");
+            final var message = "no executor service found for [" + name + "]";
+            assert false : message;
+            throw new IllegalArgumentException(message);
         }
         return holder.executor();
     }
@@ -399,11 +467,11 @@ public class ThreadPool implements ReportingService<ThreadPoolInfo>, Scheduler {
      * @throws org.elasticsearch.common.util.concurrent.EsRejectedExecutionException if the task cannot be scheduled for execution
      */
     @Override
-    public ScheduledCancellable schedule(Runnable command, TimeValue delay, String executor) {
+    public ScheduledCancellable schedule(Runnable command, TimeValue delay, Executor executor) {
         final Runnable contextPreservingRunnable = threadContext.preserveContext(command);
         final Runnable toSchedule;
-        if (Names.SAME.equals(executor) == false) {
-            toSchedule = new ThreadedRunnable(contextPreservingRunnable, executor(executor));
+        if (executor != EsExecutors.DIRECT_EXECUTOR_SERVICE) {
+            toSchedule = new ThreadedRunnable(contextPreservingRunnable, executor);
         } else if (slowSchedulerWarnThresholdNanos > 0) {
             toSchedule = new Runnable() {
                 @Override
@@ -435,14 +503,14 @@ public class ThreadPool implements ReportingService<ThreadPoolInfo>, Scheduler {
         return new ScheduledCancellableAdapter(scheduler.schedule(toSchedule, delay.millis(), TimeUnit.MILLISECONDS));
     }
 
-    public void scheduleUnlessShuttingDown(TimeValue delay, String executor, Runnable command) {
+    public void scheduleUnlessShuttingDown(TimeValue delay, Executor executor, Runnable command) {
         try {
             schedule(command, delay, executor);
         } catch (EsRejectedExecutionException e) {
             if (e.isExecutorShutdown()) {
                 logger.debug(
-                    new ParameterizedMessage(
-                        "could not schedule execution of [{}] after [{}] on [{}] as executor is shut down",
+                    () -> format(
+                        "could not schedule execution of [%s] after [%s] on [%s] as executor is shut down",
                         command,
                         delay,
                         executor
@@ -455,18 +523,14 @@ public class ThreadPool implements ReportingService<ThreadPoolInfo>, Scheduler {
         }
     }
 
-    @Override
-    public Cancellable scheduleWithFixedDelay(Runnable command, TimeValue interval, String executor) {
-        return new ReschedulingRunnable(command, interval, executor, this, (e) -> {
+    public Cancellable scheduleWithFixedDelay(Runnable command, TimeValue interval, Executor executor) {
+        var runnable = new ReschedulingRunnable(command, interval, executor, this, (e) -> {
             if (logger.isDebugEnabled()) {
-                logger.debug(() -> new ParameterizedMessage("scheduled task [{}] was rejected on thread pool [{}]", command, executor), e);
+                logger.debug(() -> format("scheduled task [%s] was rejected on thread pool [%s]", command, executor), e);
             }
-        },
-            (e) -> logger.warn(
-                () -> new ParameterizedMessage("failed to run scheduled task [{}] on thread pool [{}]", command, executor),
-                e
-            )
-        );
+        }, (e) -> logger.warn(() -> format("failed to run scheduled task [%s] on thread pool [%s]", command, executor), e));
+        runnable.start();
+        return runnable;
     }
 
     protected final void stopCachedTimeThread() {
@@ -520,23 +584,46 @@ public class ThreadPool implements ReportingService<ThreadPoolInfo>, Scheduler {
      * than value, otherwise value
      */
     static int boundedBy(int value, int min, int max) {
+        assert min < max : min + " vs " + max;
         return Math.min(max, Math.max(min, value));
     }
 
+    static int halfAllocatedProcessors(final int allocatedProcessors) {
+        return (allocatedProcessors + 1) / 2;
+    }
+
     static int halfAllocatedProcessorsMaxFive(final int allocatedProcessors) {
-        return boundedBy((allocatedProcessors + 1) / 2, 1, 5);
+        return boundedBy(halfAllocatedProcessors(allocatedProcessors), 1, 5);
     }
 
     static int halfAllocatedProcessorsMaxTen(final int allocatedProcessors) {
-        return boundedBy((allocatedProcessors + 1) / 2, 1, 10);
+        return boundedBy(halfAllocatedProcessors(allocatedProcessors), 1, 10);
     }
 
     static int twiceAllocatedProcessors(final int allocatedProcessors) {
         return boundedBy(2 * allocatedProcessors, 2, Integer.MAX_VALUE);
     }
 
-    public static int searchThreadPoolSize(final int allocatedProcessors) {
+    public static int oneEighthAllocatedProcessors(final int allocatedProcessors) {
+        return boundedBy(allocatedProcessors / 8, 1, Integer.MAX_VALUE);
+    }
+
+    public static int searchOrGetThreadPoolSize(final int allocatedProcessors) {
         return ((allocatedProcessors * 3) / 2) + 1;
+    }
+
+    static int getMaxSnapshotThreadPoolSize(int allocatedProcessors) {
+        final ByteSizeValue maxHeapSize = ByteSizeValue.ofBytes(Runtime.getRuntime().maxMemory());
+        return getMaxSnapshotThreadPoolSize(allocatedProcessors, maxHeapSize);
+    }
+
+    static int getMaxSnapshotThreadPoolSize(int allocatedProcessors, final ByteSizeValue maxHeapSize) {
+        // While on larger data nodes, larger snapshot threadpool size improves snapshotting on high latency blob stores,
+        // smaller instances can run into OOM issues and need a smaller snapshot threadpool size.
+        if (maxHeapSize.compareTo(new ByteSizeValue(750, ByteSizeUnit.MB)) < 0) {
+            return halfAllocatedProcessorsMaxFive(allocatedProcessors);
+        }
+        return 10;
     }
 
     static class ThreadedRunnable implements Runnable {
@@ -557,11 +644,7 @@ public class ThreadPool implements ReportingService<ThreadPoolInfo>, Scheduler {
             } catch (EsRejectedExecutionException e) {
                 if (e.isExecutorShutdown()) {
                     logger.debug(
-                        new ParameterizedMessage(
-                            "could not schedule execution of [{}] on [{}] as executor is shut down",
-                            runnable,
-                            executor
-                        ),
+                        () -> format("could not schedule execution of [%s] on [%s] as executor is shut down", runnable, executor),
                         e
                     );
                 } else {
@@ -887,6 +970,22 @@ public class ThreadPool implements ReportingService<ThreadPoolInfo>, Scheduler {
     public static boolean assertNotScheduleThread(String reason) {
         assert Thread.currentThread().getName().contains("scheduler") == false
             : "Expected current thread [" + Thread.currentThread() + "] to not be the scheduler thread. Reason: [" + reason + "]";
+        return true;
+    }
+
+    public static boolean assertCurrentThreadPool(String... permittedThreadPoolNames) {
+        final var threadName = Thread.currentThread().getName();
+        assert threadName.startsWith("TEST-")
+            || threadName.startsWith("LuceneTestCase")
+            || Arrays.stream(permittedThreadPoolNames).anyMatch(n -> threadName.contains('[' + n + ']'))
+            : threadName + " not in " + Arrays.toString(permittedThreadPoolNames) + " nor a test thread";
+        return true;
+    }
+
+    public static boolean assertInSystemContext(ThreadPool threadPool) {
+        final var threadName = Thread.currentThread().getName();
+        assert threadName.startsWith("TEST-") || threadName.startsWith("LuceneTestCase") || threadPool.getThreadContext().isSystemContext()
+            : threadName + " is not running in the system context nor a test thread";
         return true;
     }
 

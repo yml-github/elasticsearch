@@ -10,8 +10,9 @@ package org.elasticsearch.xpack.core.security.authz.store;
 import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.common.bytes.BytesReference;
 import org.elasticsearch.common.hash.MessageDigests;
+import org.elasticsearch.xpack.core.security.authc.CrossClusterAccessSubjectInfo;
+import org.elasticsearch.xpack.core.security.authz.RoleDescriptor;
 
-import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -55,10 +56,13 @@ public interface RoleReference {
         public RoleKey id() {
             if (roleNames.length == 0) {
                 return RoleKey.ROLE_KEY_EMPTY;
-            } else if (Arrays.asList(roleNames).contains(ReservedRolesStore.SUPERUSER_ROLE_DESCRIPTOR.getName())) {
-                return RoleKey.ROLE_KEY_SUPERUSER;
             } else {
-                return new RoleKey(Set.copyOf(new HashSet<>(List.of(roleNames))), RoleKey.ROLES_STORE_SOURCE);
+                final Set<String> distinctRoles = new HashSet<>(List.of(roleNames));
+                if (distinctRoles.size() == 1 && distinctRoles.contains(ReservedRolesStore.SUPERUSER_ROLE_DESCRIPTOR.getName())) {
+                    return RoleKey.ROLE_KEY_SUPERUSER;
+                } else {
+                    return new RoleKey(Set.copyOf(distinctRoles), RoleKey.ROLES_STORE_SOURCE);
+                }
             }
         }
 
@@ -75,13 +79,13 @@ public interface RoleReference {
 
         private final String apiKeyId;
         private final BytesReference roleDescriptorsBytes;
-        private final String roleKeySource;
+        private final ApiKeyRoleType roleType;
         private RoleKey id = null;
 
-        public ApiKeyRoleReference(String apiKeyId, BytesReference roleDescriptorsBytes, String roleKeySource) {
+        public ApiKeyRoleReference(String apiKeyId, BytesReference roleDescriptorsBytes, ApiKeyRoleType roleType) {
             this.apiKeyId = apiKeyId;
             this.roleDescriptorsBytes = roleDescriptorsBytes;
-            this.roleKeySource = roleKeySource;
+            this.roleType = roleType;
         }
 
         @Override
@@ -91,7 +95,7 @@ public interface RoleReference {
                 final String roleDescriptorsHash = MessageDigests.toHexString(
                     MessageDigests.digest(roleDescriptorsBytes, MessageDigests.sha256())
                 );
-                id = new RoleKey(Set.of("apikey:" + roleDescriptorsHash), roleKeySource);
+                id = new RoleKey(Set.of("apikey:" + roleDescriptorsHash), "apikey_" + roleType);
             }
             return id;
         }
@@ -108,6 +112,71 @@ public interface RoleReference {
         public BytesReference getRoleDescriptorsBytes() {
             return roleDescriptorsBytes;
         }
+
+        public ApiKeyRoleType getRoleType() {
+            return roleType;
+        }
+    }
+
+    final class CrossClusterAccessRoleReference implements RoleReference {
+
+        private final CrossClusterAccessSubjectInfo.RoleDescriptorsBytes roleDescriptorsBytes;
+        private RoleKey id = null;
+        private final String userPrincipal;
+
+        public CrossClusterAccessRoleReference(
+            String userPrincipal,
+            CrossClusterAccessSubjectInfo.RoleDescriptorsBytes roleDescriptorsBytes
+        ) {
+            this.userPrincipal = userPrincipal;
+            this.roleDescriptorsBytes = roleDescriptorsBytes;
+        }
+
+        @Override
+        public RoleKey id() {
+            // Hashing can be expensive. memorize the result in case the method is called multiple times.
+            if (id == null) {
+                final String roleDescriptorsHash = roleDescriptorsBytes.digest();
+                id = new RoleKey(Set.of("cross_cluster_access:" + roleDescriptorsHash), "cross_cluster_access");
+            }
+            return id;
+        }
+
+        @Override
+        public void resolve(RoleReferenceResolver resolver, ActionListener<RolesRetrievalResult> listener) {
+            resolver.resolveCrossClusterAccessRoleReference(this, listener);
+        }
+
+        public String getUserPrincipal() {
+            return userPrincipal;
+        }
+
+        public CrossClusterAccessSubjectInfo.RoleDescriptorsBytes getRoleDescriptorsBytes() {
+            return roleDescriptorsBytes;
+        }
+    }
+
+    final class FixedRoleReference implements RoleReference {
+
+        private final RoleDescriptor roleDescriptor;
+        private final String source;
+
+        public FixedRoleReference(RoleDescriptor roleDescriptor, String source) {
+            this.roleDescriptor = roleDescriptor;
+            this.source = source;
+        }
+
+        @Override
+        public RoleKey id() {
+            return new RoleKey(Set.of(roleDescriptor.getName()), source);
+        }
+
+        @Override
+        public void resolve(RoleReferenceResolver resolver, ActionListener<RolesRetrievalResult> listener) {
+            final RolesRetrievalResult rolesRetrievalResult = new RolesRetrievalResult();
+            rolesRetrievalResult.addDescriptors(Set.of(roleDescriptor));
+            listener.onResponse(rolesRetrievalResult);
+        }
     }
 
     /**
@@ -116,18 +185,18 @@ public interface RoleReference {
     final class BwcApiKeyRoleReference implements RoleReference {
         private final String apiKeyId;
         private final Map<String, Object> roleDescriptorsMap;
-        private final String roleKeySourceSuffix;
+        private final ApiKeyRoleType roleType;
 
-        public BwcApiKeyRoleReference(String apiKeyId, Map<String, Object> roleDescriptorsMap, String roleKeySourceSuffix) {
+        public BwcApiKeyRoleReference(String apiKeyId, Map<String, Object> roleDescriptorsMap, ApiKeyRoleType roleType) {
             this.apiKeyId = apiKeyId;
             this.roleDescriptorsMap = roleDescriptorsMap;
-            this.roleKeySourceSuffix = roleKeySourceSuffix;
+            this.roleType = roleType;
         }
 
         @Override
         public RoleKey id() {
             // Since api key id is unique, it is sufficient and more correct to use it as the names
-            return new RoleKey(Set.of(apiKeyId), "bwc_api_key" + roleKeySourceSuffix);
+            return new RoleKey(Set.of(apiKeyId), "bwc_api_key_" + roleType);
         }
 
         @Override
@@ -141,6 +210,10 @@ public interface RoleReference {
 
         public Map<String, Object> getRoleDescriptorsMap() {
             return roleDescriptorsMap;
+        }
+
+        public ApiKeyRoleType getRoleType() {
+            return roleType;
         }
     }
 
@@ -167,5 +240,19 @@ public interface RoleReference {
         public void resolve(RoleReferenceResolver resolver, ActionListener<RolesRetrievalResult> listener) {
             resolver.resolveServiceAccountRoleReference(this, listener);
         }
+    }
+
+    /**
+     * The type of one set of API key roles.
+     */
+    enum ApiKeyRoleType {
+        /**
+         * Roles directly specified by the creator user on API key creation
+         */
+        ASSIGNED,
+        /**
+         * Roles captured for the owner user as the upper bound of the assigned roles
+         */
+        LIMITED_BY;
     }
 }

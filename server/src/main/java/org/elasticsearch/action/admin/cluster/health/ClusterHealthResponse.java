@@ -9,6 +9,7 @@
 package org.elasticsearch.action.admin.cluster.health;
 
 import org.elasticsearch.action.ActionResponse;
+import org.elasticsearch.action.ClusterStatsLevel;
 import org.elasticsearch.cluster.ClusterState;
 import org.elasticsearch.cluster.health.ClusterHealthStatus;
 import org.elasticsearch.cluster.health.ClusterIndexHealth;
@@ -16,17 +17,17 @@ import org.elasticsearch.cluster.health.ClusterStateHealth;
 import org.elasticsearch.common.Strings;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
-import org.elasticsearch.common.xcontent.StatusToXContentObject;
+import org.elasticsearch.common.util.Maps;
 import org.elasticsearch.core.TimeValue;
 import org.elasticsearch.rest.RestStatus;
 import org.elasticsearch.xcontent.ConstructingObjectParser;
 import org.elasticsearch.xcontent.ObjectParser;
 import org.elasticsearch.xcontent.ParseField;
+import org.elasticsearch.xcontent.ToXContentObject;
 import org.elasticsearch.xcontent.XContentBuilder;
 import org.elasticsearch.xcontent.XContentParser;
 
 import java.io.IOException;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -36,7 +37,7 @@ import static java.util.Collections.emptyMap;
 import static org.elasticsearch.xcontent.ConstructingObjectParser.constructorArg;
 import static org.elasticsearch.xcontent.ConstructingObjectParser.optionalConstructorArg;
 
-public class ClusterHealthResponse extends ActionResponse implements StatusToXContentObject {
+public class ClusterHealthResponse extends ActionResponse implements ToXContentObject {
     private static final String CLUSTER_NAME = "cluster_name";
     private static final String STATUS = "status";
     private static final String TIMED_OUT = "timed_out";
@@ -78,7 +79,7 @@ public class ClusterHealthResponse extends ActionResponse implements StatusToXCo
             if (indexList == null || indexList.isEmpty()) {
                 indices = emptyMap();
             } else {
-                indices = new HashMap<>(indexList.size());
+                indices = Maps.newMapWithExpectedSize(indexList.size());
                 for (ClusterIndexHealth indexHealth : indexList) {
                     indices.put(indexHealth.getIndex(), indexHealth);
                 }
@@ -332,7 +333,6 @@ public class ClusterHealthResponse extends ActionResponse implements StatusToXCo
         return Strings.toString(this);
     }
 
-    @Override
     public RestStatus status() {
         return isTimedOut() ? RestStatus.REQUEST_TIMEOUT : RestStatus.OK;
     }
@@ -356,8 +356,8 @@ public class ClusterHealthResponse extends ActionResponse implements StatusToXCo
         builder.humanReadableField(TASK_MAX_WAIT_TIME_IN_QUEUE_IN_MILLIS, TASK_MAX_WAIT_TIME_IN_QUEUE, getTaskMaxWaitingTime());
         builder.percentageField(ACTIVE_SHARDS_PERCENT_AS_NUMBER, ACTIVE_SHARDS_PERCENT, getActiveShardsPercent());
 
-        String level = params.param("level", "cluster");
-        boolean outputIndices = "indices".equals(level) || "shards".equals(level);
+        ClusterStatsLevel level = ClusterStatsLevel.of(params, ClusterStatsLevel.CLUSTER);
+        boolean outputIndices = level == ClusterStatsLevel.INDICES || level == ClusterStatsLevel.SHARDS;
 
         if (outputIndices) {
             builder.startObject(INDICES);

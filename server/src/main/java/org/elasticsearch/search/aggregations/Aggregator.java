@@ -77,7 +77,7 @@ public abstract class Aggregator extends BucketCollector implements Releasable {
      * aggregation.
      */
     public final Aggregator resolveSortPathOnValidAgg(AggregationPath.PathElement next, Iterator<AggregationPath.PathElement> path) {
-        Aggregator n = subAggregator(next.name);
+        Aggregator n = subAggregator(next.name());
         if (n == null) {
             throw new IllegalArgumentException(
                 "The provided aggregation ["
@@ -89,7 +89,7 @@ public abstract class Aggregator extends BucketCollector implements Releasable {
         if (false == path.hasNext()) {
             return n;
         }
-        if (next.key != null) {
+        if (next.key() != null) {
             throw new IllegalArgumentException("Key only allowed on last aggregation path element but got [" + next + "]");
         }
         return n.resolveSortPath(path.next(), path);
@@ -142,6 +142,11 @@ public abstract class Aggregator extends BucketCollector implements Releasable {
      *         of ordinals
      */
     public abstract InternalAggregation[] buildAggregations(long[] ordsToCollect) throws IOException;
+
+    /**
+     * Release this aggregation and its sub-aggregations.
+     */
+    public abstract void releaseAggregations();
 
     /**
      * Build the result of this aggregation if it is at the "top level"

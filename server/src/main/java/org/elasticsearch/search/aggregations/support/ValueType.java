@@ -49,7 +49,7 @@ public enum ValueType implements Writeable {
     final ValuesSourceType valuesSourceType;
     final DocValueFormat defaultFormat;
     private final byte id;
-    private String preferredName;
+    private final String preferredName;
 
     public static final ParseField VALUE_TYPE = new ParseField("value_type", "valueType");
 
@@ -69,7 +69,7 @@ public enum ValueType implements Writeable {
         return valuesSourceType;
     }
 
-    private static Set<ValueType> numericValueTypes = Set.of(
+    private static final Set<ValueType> numericValueTypes = Set.of(
         ValueType.DOUBLE,
         ValueType.DATE,
         ValueType.LONG,
@@ -77,7 +77,7 @@ public enum ValueType implements Writeable {
         ValueType.NUMERIC,
         ValueType.BOOLEAN
     );
-    private static Set<ValueType> stringValueTypes = Set.of(ValueType.STRING, ValueType.IP);
+    private static final Set<ValueType> stringValueTypes = Set.of(ValueType.STRING, ValueType.IP);
 
     /**
      * This is a bit of a hack to mirror the old {@link ValueType} behavior, which would allow a rough compatibility between types.  This
@@ -101,34 +101,18 @@ public enum ValueType implements Writeable {
         return isA(valueType) == false;
     }
 
-    public DocValueFormat defaultFormat() {
-        return defaultFormat;
-    }
-
     public static ValueType lenientParse(String type) {
-        switch (type) {
-            case "string":
-                return STRING;
-            case "double":
-            case "float":
-                return DOUBLE;
-            case "number":
-            case "numeric":
-            case "long":
-            case "integer":
-            case "short":
-            case "byte":
-                return LONG;
-            case "date":
-                return DATE;
-            case "ip":
-                return IP;
-            case "boolean":
-                return BOOLEAN;
-            default:
+        return switch (type) {
+            case "string" -> STRING;
+            case "double", "float" -> DOUBLE;
+            case "number", "numeric", "long", "integer", "short", "byte" -> LONG;
+            case "date" -> DATE;
+            case "ip" -> IP;
+            case "boolean" -> BOOLEAN;
+            default ->
                 // TODO: do not be lenient here
-                return null;
-        }
+                null;
+        };
     }
 
     @Override

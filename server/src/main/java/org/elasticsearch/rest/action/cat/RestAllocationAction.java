@@ -8,10 +8,9 @@
 
 package org.elasticsearch.rest.action.cat;
 
-import com.carrotsearch.hppc.ObjectIntScatterMap;
-
 import org.elasticsearch.action.admin.cluster.node.stats.NodeStats;
 import org.elasticsearch.action.admin.cluster.node.stats.NodesStatsRequest;
+import org.elasticsearch.action.admin.cluster.node.stats.NodesStatsRequestParameters;
 import org.elasticsearch.action.admin.cluster.node.stats.NodesStatsResponse;
 import org.elasticsearch.action.admin.cluster.state.ClusterStateRequest;
 import org.elasticsearch.action.admin.cluster.state.ClusterStateResponse;
@@ -24,13 +23,18 @@ import org.elasticsearch.common.Table;
 import org.elasticsearch.common.unit.ByteSizeValue;
 import org.elasticsearch.rest.RestRequest;
 import org.elasticsearch.rest.RestResponse;
+import org.elasticsearch.rest.Scope;
+import org.elasticsearch.rest.ServerlessScope;
 import org.elasticsearch.rest.action.RestActionListener;
 import org.elasticsearch.rest.action.RestResponseListener;
 
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import static org.elasticsearch.rest.RestRequest.Method.GET;
 
+@ServerlessScope(Scope.INTERNAL)
 public class RestAllocationAction extends AbstractCatAction {
 
     @Override
@@ -60,8 +64,9 @@ public class RestAllocationAction extends AbstractCatAction {
             @Override
             public void processResponse(final ClusterStateResponse state) {
                 NodesStatsRequest statsRequest = new NodesStatsRequest(nodes);
+                statsRequest.setIncludeShardsStats(false);
                 statsRequest.clear()
-                    .addMetric(NodesStatsRequest.Metric.FS.metricName())
+                    .addMetric(NodesStatsRequestParameters.Metric.FS.metricName())
                     .indices(new CommonStatsFlags(CommonStatsFlags.Flag.Store));
 
                 client.admin().cluster().nodesStats(statsRequest, new RestResponseListener<NodesStatsResponse>(channel) {
@@ -89,23 +94,21 @@ public class RestAllocationAction extends AbstractCatAction {
         table.addCell("host", "alias:h;desc:host of node");
         table.addCell("ip", "desc:ip of node");
         table.addCell("node", "alias:n;desc:name of node");
+        table.addCell("node.role", "alias:r,role,nodeRole;desc:node roles");
         table.endHeaders();
         return table;
     }
 
     private Table buildTable(RestRequest request, final ClusterStateResponse state, final NodesStatsResponse stats) {
-        final ObjectIntScatterMap<String> allocs = new ObjectIntScatterMap<>();
+        final Map<String, Integer> allocs = new HashMap<>();
 
-        for (ShardRouting shard : state.getState().routingTable().allShards()) {
+        for (ShardRouting shard : state.getState().routingTable().allShardsIterator()) {
             String nodeId = "UNASSIGNED";
-
             if (shard.assignedToNode()) {
                 nodeId = shard.currentNodeId();
             }
-
-            allocs.addTo(nodeId, 1);
+            allocs.merge(nodeId, 1, Integer::sum);
         }
-
         Table table = getTableWithHeader(request);
 
         for (NodeStats nodeStats : stats.getNodes()) {
@@ -127,14 +130,15 @@ public class RestAllocationAction extends AbstractCatAction {
 
             table.startRow();
             table.addCell(shardCount);
-            table.addCell(nodeStats.getIndices().getStore().getSize());
-            table.addCell(used < 0 ? null : new ByteSizeValue(used));
+            table.addCell(nodeStats.getIndices().getStore().size());
+            table.addCell(used < 0 ? null : ByteSizeValue.ofBytes(used));
             table.addCell(avail.getBytes() < 0 ? null : avail);
             table.addCell(total.getBytes() < 0 ? null : total);
             table.addCell(diskPercent < 0 ? null : diskPercent);
             table.addCell(node.getHostName());
             table.addCell(node.getHostAddress());
             table.addCell(node.getName());
+            table.addCell(node.getRoleAbbreviationString());
             table.endRow();
         }
 
@@ -150,6 +154,7 @@ public class RestAllocationAction extends AbstractCatAction {
             table.addCell(null);
             table.addCell(null);
             table.addCell(UNASSIGNED);
+            table.addCell(null);
             table.endRow();
         }
 

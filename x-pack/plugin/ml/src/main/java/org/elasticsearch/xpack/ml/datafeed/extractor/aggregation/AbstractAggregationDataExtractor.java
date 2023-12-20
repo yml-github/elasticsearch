@@ -17,6 +17,7 @@ import org.elasticsearch.search.aggregations.Aggregation;
 import org.elasticsearch.search.aggregations.Aggregations;
 import org.elasticsearch.search.builder.SearchSourceBuilder;
 import org.elasticsearch.xpack.core.ClientHelper;
+import org.elasticsearch.xpack.core.ml.datafeed.SearchInterval;
 import org.elasticsearch.xpack.core.ml.datafeed.extractor.DataExtractor;
 import org.elasticsearch.xpack.core.ml.datafeed.extractor.ExtractorUtils;
 import org.elasticsearch.xpack.ml.datafeed.DatafeedTimingStatsReporter;
@@ -24,12 +25,10 @@ import org.elasticsearch.xpack.ml.datafeed.DatafeedTimingStatsReporter;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.io.InputStream;
 import java.util.List;
 import java.util.NoSuchElementException;
 import java.util.Objects;
 import java.util.Optional;
-import java.util.stream.Collectors;
 
 /**
  * Abstract class for aggregated data extractors, e.g. {@link RollupDataExtractor}
@@ -79,26 +78,43 @@ abstract class AbstractAggregationDataExtractor<T extends ActionRequestBuilder<S
     }
 
     @Override
+    public void destroy() {
+        cancel();
+    }
+
+    @Override
     public long getEndTime() {
         return context.end;
     }
 
     @Override
-    public Optional<InputStream> next() throws IOException {
+    public Result next() throws IOException {
         if (hasNext() == false) {
             throw new NoSuchElementException();
         }
 
+        SearchInterval searchInterval = new SearchInterval(context.start, context.end);
         if (aggregationToJsonProcessor == null) {
             Aggregations aggs = search();
             if (aggs == null) {
                 hasNext = false;
-                return Optional.empty();
+                return new Result(searchInterval, Optional.empty());
             }
             initAggregationProcessor(aggs);
         }
 
-        return Optional.of(processNextBatch());
+        outputStream.reset();
+        // We can cancel immediately as we process whole date_histogram buckets at a time
+        aggregationToJsonProcessor.writeAllDocsCancellable(_timestamp -> isCancelled, outputStream);
+        // We process the whole search. So, if we are chunking or not, we have nothing more to process given the current query
+        hasNext = false;
+
+        return new Result(
+            searchInterval,
+            aggregationToJsonProcessor.getKeyValueCount() > 0
+                ? Optional.of(new ByteArrayInputStream(outputStream.toByteArray()))
+                : Optional.empty()
+        );
     }
 
     private Aggregations search() {
@@ -106,9 +122,14 @@ abstract class AbstractAggregationDataExtractor<T extends ActionRequestBuilder<S
         T searchRequest = buildSearchRequest(buildBaseSearchSource());
         assert searchRequest.request().allowPartialSearchResults() == false;
         SearchResponse searchResponse = executeSearchRequest(searchRequest);
-        LOGGER.debug("[{}] Search response was obtained", context.jobId);
-        timingStatsReporter.reportSearchDuration(searchResponse.getTook());
-        return validateAggs(searchResponse.getAggregations());
+        try {
+            checkForSkippedClusters(searchResponse);
+            LOGGER.debug("[{}] Search response was obtained", context.jobId);
+            timingStatsReporter.reportSearchDuration(searchResponse.getTook());
+            return validateAggs(searchResponse.getAggregations());
+        } finally {
+            searchResponse.decRef();
+        }
     }
 
     private void initAggregationProcessor(Aggregations aggs) throws IOException {
@@ -145,7 +166,7 @@ abstract class AbstractAggregationDataExtractor<T extends ActionRequestBuilder<S
 
     protected abstract T buildSearchRequest(SearchSourceBuilder searchRequestBuilder);
 
-    private Aggregations validateAggs(@Nullable Aggregations aggs) {
+    private static Aggregations validateAggs(@Nullable Aggregations aggs) {
         if (aggs == null) {
             return null;
         }
@@ -155,22 +176,11 @@ abstract class AbstractAggregationDataExtractor<T extends ActionRequestBuilder<S
         }
         if (aggsAsList.size() > 1) {
             throw new IllegalArgumentException(
-                "Multiple top level aggregations not supported; found: "
-                    + aggsAsList.stream().map(Aggregation::getName).collect(Collectors.toList())
+                "Multiple top level aggregations not supported; found: " + aggsAsList.stream().map(Aggregation::getName).toList()
             );
         }
 
         return aggs;
-    }
-
-    private InputStream processNextBatch() throws IOException {
-        outputStream.reset();
-
-        // We can cancel immediately as we process whole date_histogram buckets at a time
-        aggregationToJsonProcessor.writeAllDocsCancellable(_timestamp -> isCancelled, outputStream);
-        // We process the whole search. So, if we are chunking or not, we have nothing more to process given the current query
-        hasNext = false;
-        return new ByteArrayInputStream(outputStream.toByteArray());
     }
 
     public AggregationDataExtractorContext getContext() {

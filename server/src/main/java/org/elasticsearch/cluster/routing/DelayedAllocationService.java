@@ -21,12 +21,16 @@ import org.elasticsearch.cluster.service.ClusterService;
 import org.elasticsearch.common.component.AbstractLifecycleComponent;
 import org.elasticsearch.common.inject.Inject;
 import org.elasticsearch.common.util.concurrent.AbstractRunnable;
+import org.elasticsearch.common.util.concurrent.EsExecutors;
+import org.elasticsearch.core.SuppressForbidden;
 import org.elasticsearch.core.TimeValue;
 import org.elasticsearch.threadpool.Scheduler;
 import org.elasticsearch.threadpool.ThreadPool;
 
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
+
+import static org.elasticsearch.cluster.routing.allocation.allocator.AllocationActionListener.rerouteCompletionIsNotRequired;
 
 /**
  * The {@link DelayedAllocationService} listens to cluster state changes and checks
@@ -38,7 +42,7 @@ import java.util.concurrent.atomic.AtomicReference;
  * This class is responsible for choosing the next (closest) delay expiration of a
  * delayed shard to schedule a reroute to remove the delay marker.
  * The actual removal of the delay marker happens in
- * {@link AllocationService#removeDelayMarkers(RoutingAllocation)}, triggering yet
+ * {@link AllocationService.RerouteStrategy#removeDelayMarkers(RoutingAllocation)}, triggering yet
  * another cluster change event.
  */
 public class DelayedAllocationService extends AbstractLifecycleComponent implements ClusterStateListener {
@@ -85,7 +89,7 @@ public class DelayedAllocationService extends AbstractLifecycleComponent impleme
                     if (cancelScheduling.get()) {
                         return;
                     }
-                    clusterService.submitStateUpdateTask(CLUSTER_UPDATE_TASK_SOURCE, DelayedRerouteTask.this);
+                    submitUnbatchedTask(CLUSTER_UPDATE_TASK_SOURCE, DelayedRerouteTask.this);
                 }
 
                 @Override
@@ -93,17 +97,18 @@ public class DelayedAllocationService extends AbstractLifecycleComponent impleme
                     logger.warn("failed to submit schedule/execute reroute post unassigned shard", e);
                     removeIfSameTask(DelayedRerouteTask.this);
                 }
-            }, nextDelay, ThreadPool.Names.SAME);
+            }, nextDelay, EsExecutors.DIRECT_EXECUTOR_SERVICE);
         }
 
         @Override
         public ClusterState execute(ClusterState currentState) throws Exception {
             removeIfSameTask(this);
-            return allocationService.reroute(currentState, "assign delayed unassigned shards");
+            // rerouteCompletionIsNotRequired() as this update is scheduled and is not triggered by user request
+            return allocationService.reroute(currentState, "assign delayed unassigned shards", rerouteCompletionIsNotRequired());
         }
 
         @Override
-        public void clusterStateProcessed(String source, ClusterState oldState, ClusterState newState) {
+        public void clusterStateProcessed(ClusterState oldState, ClusterState newState) {
             if (oldState == newState) {
                 // no state changed, check when we should remove the delay flag from the shards the next time.
                 // if cluster state changed, we can leave the scheduling of the next delay up to the clusterChangedEvent
@@ -113,12 +118,18 @@ public class DelayedAllocationService extends AbstractLifecycleComponent impleme
         }
 
         @Override
-        public void onFailure(String source, Exception e) {
+        public void onFailure(Exception e) {
             removeIfSameTask(this);
             logger.warn("failed to schedule/execute reroute post unassigned shard", e);
         }
     }
 
+    @SuppressForbidden(reason = "legacy usage of unbatched task") // TODO add support for batching here
+    private void submitUnbatchedTask(@SuppressWarnings("SameParameterValue") String source, ClusterStateUpdateTask task) {
+        clusterService.submitUnbatchedStateUpdateTask(source, task);
+    }
+
+    @SuppressWarnings("this-escape")
     @Inject
     public DelayedAllocationService(ThreadPool threadPool, ClusterService clusterService, AllocationService allocationService) {
         this.threadPool = threadPool;

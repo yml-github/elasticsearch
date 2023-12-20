@@ -78,14 +78,14 @@ public class CollapseBuilder implements Writeable, ToXContentObject {
     public CollapseBuilder(StreamInput in) throws IOException {
         this.field = in.readString();
         this.maxConcurrentGroupRequests = in.readVInt();
-        this.innerHits = in.readList(InnerHitBuilder::new);
+        this.innerHits = in.readCollectionAsList(InnerHitBuilder::new);
     }
 
     @Override
     public void writeTo(StreamOutput out) throws IOException {
         out.writeString(field);
         out.writeVInt(maxConcurrentGroupRequests);
-        out.writeList(innerHits);
+        out.writeCollection(innerHits);
     }
 
     public static CollapseBuilder fromXContent(XContentParser parser) {
@@ -198,12 +198,12 @@ public class CollapseBuilder implements Writeable, ToXContentObject {
         if (fieldType.hasDocValues() == false) {
             throw new IllegalArgumentException("cannot collapse on field `" + field + "` without `doc_values`");
         }
-        if (fieldType.isSearchable() == false && (innerHits != null && innerHits.isEmpty() == false)) {
+        if (fieldType.isIndexed() == false && (innerHits != null && innerHits.isEmpty() == false)) {
             throw new IllegalArgumentException(
                 "cannot expand `inner_hits` for collapse field `" + field + "`, " + "only indexed field can retrieve `inner_hits`"
             );
         }
 
-        return new CollapseContext(field, fieldType, innerHits);
+        return new CollapseContext(field, fieldType);
     }
 }

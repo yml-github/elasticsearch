@@ -6,6 +6,9 @@
  */
 package org.elasticsearch.xpack.sql.action;
 
+import com.fasterxml.jackson.core.JsonGenerator;
+
+import org.elasticsearch.TransportVersions;
 import org.elasticsearch.Version;
 import org.elasticsearch.action.ActionResponse;
 import org.elasticsearch.common.Strings;
@@ -27,7 +30,6 @@ import java.util.List;
 import java.util.Objects;
 
 import static java.util.Collections.unmodifiableList;
-import static org.elasticsearch.Version.CURRENT;
 import static org.elasticsearch.xpack.sql.action.AbstractSqlQueryRequest.CURSOR;
 import static org.elasticsearch.xpack.sql.proto.Mode.CLI;
 import static org.elasticsearch.xpack.sql.proto.Mode.JDBC;
@@ -81,7 +83,7 @@ public class SqlQueryResponse extends ActionResponse implements ToXContentObject
             }
         }
         this.rows = unmodifiableList(rows);
-        if (in.getVersion().onOrAfter(Version.V_7_14_0)) {
+        if (in.getTransportVersion().onOrAfter(TransportVersions.V_7_14_0)) {
             columnar = in.readBoolean();
             asyncExecutionId = in.readOptionalString();
             isPartial = in.readBoolean();
@@ -106,7 +108,7 @@ public class SqlQueryResponse extends ActionResponse implements ToXContentObject
     ) {
         this.cursor = cursor;
         this.mode = mode;
-        this.sqlVersion = sqlVersion != null ? sqlVersion : fromId(CURRENT.id);
+        this.sqlVersion = sqlVersion != null ? sqlVersion : fromId(Version.CURRENT.id);
         this.columnar = columnar;
         this.columns = columns;
         this.rows = rows;
@@ -208,10 +210,9 @@ public class SqlQueryResponse extends ActionResponse implements ToXContentObject
 
             if (columns != null) {
                 builder.startArray("columns");
-                {
-                    for (ColumnInfo column : columns) {
-                        column.toXContent(builder, params);
-                    }
+
+                for (ColumnInfo column : columns) {
+                    toXContent(column, builder, params);
                 }
                 builder.endArray();
             }
@@ -253,12 +254,29 @@ public class SqlQueryResponse extends ActionResponse implements ToXContentObject
     }
 
     /**
+     * See sql-proto {@link org.elasticsearch.xpack.sql.proto.Payloads#generate(JsonGenerator, ColumnInfo)}
+     */
+    private static XContentBuilder toXContent(ColumnInfo info, XContentBuilder builder, Params params) throws IOException {
+        builder.startObject();
+        String table = info.table();
+        if (table != null && table.isEmpty() == false) {
+            builder.field("table", table);
+        }
+        builder.field("name", info.name());
+        builder.field("type", info.esType());
+        if (info.displaySize() != null) {
+            builder.field("display_size", info.displaySize());
+        }
+        return builder.endObject();
+    }
+
+    /**
      * Serializes the provided value in SQL-compatible way based on the client mode
      */
     public static XContentBuilder value(XContentBuilder builder, Mode mode, SqlVersion sqlVersion, Object value) throws IOException {
         if (value instanceof ZonedDateTime zdt) {
             // use the ISO format
-            if (mode == JDBC && isClientCompatible(SqlVersion.fromId(CURRENT.id), sqlVersion)) {
+            if (mode == JDBC && isClientCompatible(SqlVersion.fromId(Version.CURRENT.id), sqlVersion)) {
                 builder.value(StringUtils.toString(zdt, sqlVersion));
             } else {
                 builder.value(StringUtils.toString(zdt));
@@ -266,6 +284,8 @@ public class SqlQueryResponse extends ActionResponse implements ToXContentObject
         } else if (mode == CLI && value != null && value.getClass().getSuperclass().getSimpleName().equals(INTERVAL_CLASS_NAME)) {
             // use the SQL format for intervals when sending back the response for CLI
             // all other clients will receive ISO 8601 formatted intervals
+            builder.value(value.toString());
+        } else if (value instanceof org.elasticsearch.xpack.versionfield.Version) {
             builder.value(value.toString());
         } else {
             builder.value(value);

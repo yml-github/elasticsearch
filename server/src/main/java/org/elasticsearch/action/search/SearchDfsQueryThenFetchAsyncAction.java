@@ -12,9 +12,10 @@ import org.apache.logging.log4j.Logger;
 import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.cluster.ClusterState;
 import org.elasticsearch.cluster.routing.GroupShardsIterator;
+import org.elasticsearch.search.SearchPhaseResult;
 import org.elasticsearch.search.SearchShardTarget;
-import org.elasticsearch.search.builder.SearchSourceBuilder;
 import org.elasticsearch.search.dfs.AggregatedDfs;
+import org.elasticsearch.search.dfs.DfsKnnResults;
 import org.elasticsearch.search.dfs.DfsSearchResult;
 import org.elasticsearch.search.internal.AliasFilter;
 import org.elasticsearch.transport.Transport;
@@ -26,9 +27,8 @@ import java.util.function.BiFunction;
 
 final class SearchDfsQueryThenFetchAsyncAction extends AbstractSearchAsyncAction<DfsSearchResult> {
 
-    private final SearchPhaseController searchPhaseController;
-
-    private final QueryPhaseResultConsumer queryPhaseResultConsumer;
+    private final SearchPhaseResults<SearchPhaseResult> queryPhaseResultConsumer;
+    private final SearchProgressListener progressListener;
 
     SearchDfsQueryThenFetchAsyncAction(
         final Logger logger,
@@ -36,9 +36,8 @@ final class SearchDfsQueryThenFetchAsyncAction extends AbstractSearchAsyncAction
         final BiFunction<String, String, Transport.Connection> nodeIdToConnection,
         final Map<String, AliasFilter> aliasFilter,
         final Map<String, Float> concreteIndexBoosts,
-        final SearchPhaseController searchPhaseController,
         final Executor executor,
-        final QueryPhaseResultConsumer queryPhaseResultConsumer,
+        final SearchPhaseResults<SearchPhaseResult> queryPhaseResultConsumer,
         final SearchRequest request,
         final ActionListener<SearchResponse> listener,
         final GroupShardsIterator<SearchShardIterator> shardsIts,
@@ -66,15 +65,12 @@ final class SearchDfsQueryThenFetchAsyncAction extends AbstractSearchAsyncAction
             clusters
         );
         this.queryPhaseResultConsumer = queryPhaseResultConsumer;
-        this.searchPhaseController = searchPhaseController;
-        SearchProgressListener progressListener = task.getProgressListener();
-        SearchSourceBuilder sourceBuilder = request.source();
-        progressListener.notifyListShards(
-            SearchProgressListener.buildSearchShards(this.shardsIts),
-            SearchProgressListener.buildSearchShards(toSkipShardsIts),
-            clusters,
-            sourceBuilder == null || sourceBuilder.size() != 0
-        );
+        addReleasable(queryPhaseResultConsumer::decRef);
+        this.progressListener = task.getProgressListener();
+        // don't build the SearchShard list (can be expensive) if the SearchProgressListener won't use it
+        if (progressListener != SearchProgressListener.NOOP) {
+            notifyListShards(progressListener, clusters, request.source());
+        }
     }
 
     @Override
@@ -94,14 +90,21 @@ final class SearchDfsQueryThenFetchAsyncAction extends AbstractSearchAsyncAction
     @Override
     protected SearchPhase getNextPhase(final SearchPhaseResults<DfsSearchResult> results, SearchPhaseContext context) {
         final List<DfsSearchResult> dfsSearchResults = results.getAtomicArray().asList();
-        final AggregatedDfs aggregatedDfs = searchPhaseController.aggregateDfs(dfsSearchResults);
-
+        final AggregatedDfs aggregatedDfs = SearchPhaseController.aggregateDfs(dfsSearchResults);
+        final List<DfsKnnResults> mergedKnnResults = SearchPhaseController.mergeKnnResults(getRequest(), dfsSearchResults);
+        queryPhaseResultConsumer.incRef();
         return new DfsQueryPhase(
             dfsSearchResults,
             aggregatedDfs,
+            mergedKnnResults,
             queryPhaseResultConsumer,
-            (queryResults) -> new FetchSearchPhase(queryResults, searchPhaseController, aggregatedDfs, context),
+            (queryResults) -> new FetchSearchPhase(queryResults, aggregatedDfs, context),
             context
         );
+    }
+
+    @Override
+    protected void onShardGroupFailure(int shardIndex, SearchShardTarget shardTarget, Exception exc) {
+        progressListener.notifyQueryFailure(shardIndex, shardTarget, exc);
     }
 }

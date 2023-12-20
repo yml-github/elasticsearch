@@ -6,7 +6,6 @@
  */
 package org.elasticsearch.xpack.ml.integration;
 
-import org.elasticsearch.Version;
 import org.elasticsearch.action.ActionFuture;
 import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.action.admin.indices.alias.get.GetAliasesRequest;
@@ -29,8 +28,8 @@ import org.elasticsearch.cluster.routing.UnassignedInfo;
 import org.elasticsearch.cluster.service.ClusterApplierService;
 import org.elasticsearch.cluster.service.ClusterService;
 import org.elasticsearch.cluster.service.MasterService;
+import org.elasticsearch.common.CheckedSupplier;
 import org.elasticsearch.common.Strings;
-import org.elasticsearch.common.collect.ImmutableOpenMap;
 import org.elasticsearch.common.settings.ClusterSettings;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.core.TimeValue;
@@ -43,6 +42,7 @@ import org.elasticsearch.xcontent.XContentType;
 import org.elasticsearch.xpack.core.ClientHelper;
 import org.elasticsearch.xpack.core.action.util.PageParams;
 import org.elasticsearch.xpack.core.action.util.QueryPage;
+import org.elasticsearch.xpack.core.ml.MlConfigVersion;
 import org.elasticsearch.xpack.core.ml.MlMetaIndex;
 import org.elasticsearch.xpack.core.ml.action.PutJobAction;
 import org.elasticsearch.xpack.core.ml.calendars.Calendar;
@@ -62,6 +62,9 @@ import org.elasticsearch.xpack.core.ml.job.process.autodetect.state.DataCountsTe
 import org.elasticsearch.xpack.core.ml.job.process.autodetect.state.ModelSizeStats;
 import org.elasticsearch.xpack.core.ml.job.process.autodetect.state.ModelSnapshot;
 import org.elasticsearch.xpack.core.ml.job.process.autodetect.state.Quantiles;
+import org.elasticsearch.xpack.core.ml.job.process.autodetect.state.TimingStats;
+import org.elasticsearch.xpack.core.ml.job.results.Result;
+import org.elasticsearch.xpack.core.ml.utils.MlIndexAndAlias;
 import org.elasticsearch.xpack.core.ml.utils.ToXContentParams;
 import org.elasticsearch.xpack.ml.MlSingleNodeTestCase;
 import org.elasticsearch.xpack.ml.inference.ingest.InferenceProcessor;
@@ -88,6 +91,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
 import java.util.stream.Collectors;
 
 import static org.elasticsearch.xpack.core.ml.job.persistence.AnomalyDetectorsIndex.createStateIndexAndAliasIfNecessary;
@@ -106,6 +110,7 @@ public class JobResultsProviderIT extends MlSingleNodeTestCase {
 
     private JobResultsProvider jobProvider;
     private ResultsPersisterService resultsPersisterService;
+    private JobResultsPersister jobResultsPersister;
     private AnomalyDetectionAuditor auditor;
 
     @Before
@@ -127,11 +132,15 @@ public class JobResultsProviderIT extends MlSingleNodeTestCase {
                 )
             )
         );
-        ClusterService clusterService = new ClusterService(builder.build(), clusterSettings, tp);
+        ClusterService clusterService = new ClusterService(builder.build(), clusterSettings, tp, null);
 
         OriginSettingClient originSettingClient = new OriginSettingClient(client(), ClientHelper.ML_ORIGIN);
         resultsPersisterService = new ResultsPersisterService(tp, originSettingClient, clusterService, builder.build());
-        auditor = new AnomalyDetectionAuditor(client(), clusterService);
+        jobResultsPersister = new JobResultsPersister(originSettingClient, resultsPersisterService);
+        // We can't change the signature of createComponents to e.g. pass differing values of includeNodeInfo to pass to the
+        // AnomalyDetectionAuditor constructor. Instead we generate a random boolean value for that purpose.
+        boolean includeNodeInfo = randomBoolean();
+        auditor = new AnomalyDetectionAuditor(client(), clusterService, includeNodeInfo);
         waitForMlTemplates();
     }
 
@@ -248,7 +257,7 @@ public class JobResultsProviderIT extends MlSingleNodeTestCase {
         String sharedResultsIndex = AnomalyDetectorsIndexFields.RESULTS_INDEX_PREFIX + AnomalyDetectorsIndexFields.RESULTS_INDEX_DEFAULT;
         GetMappingsRequest request = new GetMappingsRequest().indices(sharedResultsIndex);
         GetMappingsResponse response = client().execute(GetMappingsAction.INSTANCE, request).actionGet();
-        ImmutableOpenMap<String, MappingMetadata> indexMappings = response.getMappings();
+        Map<String, MappingMetadata> indexMappings = response.getMappings();
         assertNotNull(indexMappings);
         MappingMetadata typeMappings = indexMappings.get(sharedResultsIndex);
         assertNotNull("expected " + sharedResultsIndex + " in " + indexMappings, typeMappings);
@@ -406,10 +415,100 @@ public class JobResultsProviderIT extends MlSingleNodeTestCase {
         }
     }
 
+    public void testGetDataCountsModelSizeAndTimingStatsWithNoDocs() throws Exception {
+        Job.Builder job = new Job.Builder("first_job");
+        job.setAnalysisConfig(createAnalysisConfig("by_field_1", Collections.emptyList()));
+        job.setDataDescription(new DataDescription.Builder());
+
+        // Put first job. This should create the results index as it's the first job.
+        client().execute(PutJobAction.INSTANCE, new PutJobAction.Request(job)).actionGet();
+        AtomicReference<DataCounts> dataCountsAtomicReference = new AtomicReference<>();
+        AtomicReference<ModelSizeStats> modelSizeStatsAtomicReference = new AtomicReference<>();
+        AtomicReference<TimingStats> timingStatsAtomicReference = new AtomicReference<>();
+        AtomicReference<Exception> exceptionAtomicReference = new AtomicReference<>();
+
+        getDataCountsModelSizeAndTimingStats(
+            job.getId(),
+            dataCountsAtomicReference::set,
+            modelSizeStatsAtomicReference::set,
+            timingStatsAtomicReference::set,
+            exceptionAtomicReference::set
+        );
+
+        if (exceptionAtomicReference.get() != null) {
+            throw exceptionAtomicReference.get();
+        }
+
+        assertThat(dataCountsAtomicReference.get().getJobId(), equalTo(job.getId()));
+        assertThat(modelSizeStatsAtomicReference.get().getJobId(), equalTo(job.getId()));
+        assertThat(timingStatsAtomicReference.get().getJobId(), equalTo(job.getId()));
+    }
+
+    public void testGetDataCountsModelSizeAndTimingStatsWithSomeDocs() throws Exception {
+        Job.Builder job = new Job.Builder("first_job");
+        job.setAnalysisConfig(createAnalysisConfig("by_field_1", Collections.emptyList()));
+        job.setDataDescription(new DataDescription.Builder());
+
+        // Put first job. This should create the results index as it's the first job.
+        client().execute(PutJobAction.INSTANCE, new PutJobAction.Request(job)).actionGet();
+        AtomicReference<DataCounts> dataCountsAtomicReference = new AtomicReference<>();
+        AtomicReference<ModelSizeStats> modelSizeStatsAtomicReference = new AtomicReference<>();
+        AtomicReference<TimingStats> timingStatsAtomicReference = new AtomicReference<>();
+        AtomicReference<Exception> exceptionAtomicReference = new AtomicReference<>();
+
+        CheckedSupplier<Void, Exception> setOrThrow = () -> {
+            getDataCountsModelSizeAndTimingStats(
+                job.getId(),
+                dataCountsAtomicReference::set,
+                modelSizeStatsAtomicReference::set,
+                timingStatsAtomicReference::set,
+                exceptionAtomicReference::set
+            );
+
+            if (exceptionAtomicReference.get() != null) {
+                throw exceptionAtomicReference.get();
+            }
+            return null;
+        };
+
+        ModelSizeStats storedModelSizeStats = new ModelSizeStats.Builder(job.getId()).setModelBytes(10L).build();
+        jobResultsPersister.persistModelSizeStats(storedModelSizeStats, () -> false);
+        jobResultsPersister.commitWrites(job.getId(), JobResultsPersister.CommitType.RESULTS);
+
+        setOrThrow.get();
+        assertThat(dataCountsAtomicReference.get().getJobId(), equalTo(job.getId()));
+        assertThat(modelSizeStatsAtomicReference.get(), equalTo(storedModelSizeStats));
+        assertThat(timingStatsAtomicReference.get().getJobId(), equalTo(job.getId()));
+
+        TimingStats storedTimingStats = new TimingStats(job.getId());
+        storedTimingStats.updateStats(10);
+
+        jobResultsPersister.bulkPersisterBuilder(job.getId()).persistTimingStats(storedTimingStats).executeRequest();
+        jobResultsPersister.commitWrites(job.getId(), JobResultsPersister.CommitType.RESULTS);
+
+        setOrThrow.get();
+
+        assertThat(dataCountsAtomicReference.get().getJobId(), equalTo(job.getId()));
+        assertThat(modelSizeStatsAtomicReference.get(), equalTo(storedModelSizeStats));
+        assertThat(timingStatsAtomicReference.get(), equalTo(storedTimingStats));
+
+        DataCounts storedDataCounts = new DataCounts(job.getId());
+        storedDataCounts.incrementInputBytes(1L);
+        storedDataCounts.incrementMissingFieldCount(1L);
+        JobDataCountsPersister jobDataCountsPersister = new JobDataCountsPersister(client(), resultsPersisterService, auditor);
+        jobDataCountsPersister.persistDataCounts(job.getId(), storedDataCounts, true);
+        jobResultsPersister.commitWrites(job.getId(), JobResultsPersister.CommitType.RESULTS);
+
+        setOrThrow.get();
+        assertThat(dataCountsAtomicReference.get(), equalTo(storedDataCounts));
+        assertThat(modelSizeStatsAtomicReference.get(), equalTo(storedModelSizeStats));
+        assertThat(timingStatsAtomicReference.get(), equalTo(storedTimingStats));
+    }
+
     private Map<String, Object> getIndexMappingProperties(String index) {
         GetMappingsRequest request = new GetMappingsRequest().indices(index);
         GetMappingsResponse response = client().execute(GetMappingsAction.INSTANCE, request).actionGet();
-        ImmutableOpenMap<String, MappingMetadata> indexMappings = response.getMappings();
+        Map<String, MappingMetadata> indexMappings = response.getMappings();
         assertNotNull(indexMappings);
         MappingMetadata typeMappings = indexMappings.get(index);
         assertNotNull("expected " + index + " in " + indexMappings, typeMappings);
@@ -421,7 +520,8 @@ public class JobResultsProviderIT extends MlSingleNodeTestCase {
         @SuppressWarnings("unchecked")
         Map<String, Object> meta = (Map<String, Object>) mappings.get("_meta");
         assertThat(meta.keySet(), hasItem("version"));
-        assertThat(meta.get("version"), equalTo(Version.CURRENT.toString()));
+        assertThat(meta.get("version"), equalTo(MlIndexAndAlias.BWC_MAPPINGS_VERSION));
+        assertThat(meta.get("managed_index_mappings_version"), equalTo(AnomalyDetectorsIndex.RESULTS_INDEX_MAPPINGS_VERSION));
 
         @SuppressWarnings("unchecked")
         Map<String, Object> properties = (Map<String, Object>) mappings.get("properties");
@@ -431,7 +531,7 @@ public class JobResultsProviderIT extends MlSingleNodeTestCase {
 
     private Set<String> getAliases(String index) {
         GetAliasesResponse getAliasesResponse = client().admin().indices().getAliases(new GetAliasesRequest().indices(index)).actionGet();
-        ImmutableOpenMap<String, List<AliasMetadata>> aliases = getAliasesResponse.getAliases();
+        Map<String, List<AliasMetadata>> aliases = getAliasesResponse.getAliases();
         assertThat(aliases.containsKey(index), is(true));
         List<AliasMetadata> aliasMetadataList = aliases.get(index);
         for (AliasMetadata aliasMetadata : aliasMetadataList) {
@@ -496,6 +596,26 @@ public class JobResultsProviderIT extends MlSingleNodeTestCase {
         }
 
         return calendarHolder.get();
+    }
+
+    private void getDataCountsModelSizeAndTimingStats(
+        String jobId,
+        Consumer<DataCounts> dataCountsConsumer,
+        Consumer<ModelSizeStats> modelSizeStatsConsumer,
+        Consumer<TimingStats> timingStatsConsumer,
+        Consumer<Exception> exceptionConsumer
+    ) throws Exception {
+        CountDownLatch latch = new CountDownLatch(1);
+        jobProvider.getDataCountsModelSizeAndTimingStats(jobId, null, (dataCounts, modelSizeStats, timingStats) -> {
+            dataCountsConsumer.accept(dataCounts);
+            modelSizeStatsConsumer.accept(modelSizeStats);
+            timingStatsConsumer.accept(timingStats);
+            latch.countDown();
+        }, e -> {
+            exceptionConsumer.accept(e);
+            latch.countDown();
+        });
+        latch.await();
     }
 
     public void testScheduledEventsForJobs() throws Exception {
@@ -646,21 +766,21 @@ public class JobResultsProviderIT extends MlSingleNodeTestCase {
         indexModelSnapshot(
             new ModelSnapshot.Builder(jobId).setSnapshotId("snap_2")
                 .setTimestamp(Date.from(Instant.ofEpochMilli(10)))
-                .setMinVersion(Version.V_7_4_0)
+                .setMinVersion(MlConfigVersion.V_7_4_0)
                 .setQuantiles(new Quantiles(jobId, Date.from(Instant.ofEpochMilli(10)), randomAlphaOfLength(20)))
                 .build()
         );
         indexModelSnapshot(
             new ModelSnapshot.Builder(jobId).setSnapshotId("snap_1")
                 .setTimestamp(Date.from(Instant.ofEpochMilli(11)))
-                .setMinVersion(Version.V_7_2_0)
+                .setMinVersion(MlConfigVersion.V_7_2_0)
                 .setQuantiles(new Quantiles(jobId, Date.from(Instant.ofEpochMilli(11)), randomAlphaOfLength(20)))
                 .build()
         );
         indexModelSnapshot(
             new ModelSnapshot.Builder(jobId).setSnapshotId("other_snap")
                 .setTimestamp(Date.from(Instant.ofEpochMilli(12)))
-                .setMinVersion(Version.V_7_3_0)
+                .setMinVersion(MlConfigVersion.V_7_3_0)
                 .setQuantiles(new Quantiles(jobId, Date.from(Instant.ofEpochMilli(12)), randomAlphaOfLength(20)))
                 .build()
         );
@@ -668,24 +788,21 @@ public class JobResultsProviderIT extends MlSingleNodeTestCase {
         indexModelSnapshot(
             new ModelSnapshot.Builder("other_job").setSnapshotId("other_snap")
                 .setTimestamp(Date.from(Instant.ofEpochMilli(10)))
-                .setMinVersion(Version.CURRENT)
+                .setMinVersion(MlConfigVersion.CURRENT)
                 .setQuantiles(new Quantiles("other_job", Date.from(Instant.ofEpochMilli(10)), randomAlphaOfLength(20)))
                 .build()
         );
         // Add a snapshot WITHOUT a min version.
-        client().prepareIndex(AnomalyDetectorsIndex.jobResultsAliasedName("other_job"))
-            .setId(ModelSnapshot.documentId("other_job", "11"))
+        prepareIndex(AnomalyDetectorsIndex.jobResultsAliasedName("other_job")).setId(ModelSnapshot.documentId("other_job", "11"))
             .setSource("""
                 {"job_id":"other_job","snapshot_id":"11", "snapshot_doc_count":1,"retain":false}""", XContentType.JSON)
             .get();
 
-        client().admin()
-            .indices()
-            .prepareRefresh(AnomalyDetectorsIndex.jobStateIndexPattern(), AnomalyDetectorsIndex.jobResultsIndexPrefix() + "*")
+        indicesAdmin().prepareRefresh(AnomalyDetectorsIndex.jobStateIndexPattern(), AnomalyDetectorsIndex.jobResultsIndexPrefix() + "*")
             .get();
 
         PlainActionFuture<QueryPage<ModelSnapshot>> future = new PlainActionFuture<>();
-        jobProvider.modelSnapshots(jobId, 0, 4, "9", "15", "", false, "snap_2,snap_1", future::onResponse, future::onFailure);
+        jobProvider.modelSnapshots(jobId, 0, 4, "9", "15", "", false, "snap_2,snap_1", null, future::onResponse, future::onFailure);
         List<ModelSnapshot> snapshots = future.actionGet().results();
         assertThat(snapshots.get(0).getSnapshotId(), equalTo("snap_2"));
         assertNull(snapshots.get(0).getQuantiles());
@@ -693,7 +810,7 @@ public class JobResultsProviderIT extends MlSingleNodeTestCase {
         assertNull(snapshots.get(1).getQuantiles());
 
         future = new PlainActionFuture<>();
-        jobProvider.modelSnapshots(jobId, 0, 4, "9", "15", "", false, "snap_*", future::onResponse, future::onFailure);
+        jobProvider.modelSnapshots(jobId, 0, 4, "9", "15", "", false, "snap_*", null, future::onResponse, future::onFailure);
         snapshots = future.actionGet().results();
         assertThat(snapshots.get(0).getSnapshotId(), equalTo("snap_2"));
         assertThat(snapshots.get(1).getSnapshotId(), equalTo("snap_1"));
@@ -701,27 +818,27 @@ public class JobResultsProviderIT extends MlSingleNodeTestCase {
         assertNull(snapshots.get(1).getQuantiles());
 
         future = new PlainActionFuture<>();
-        jobProvider.modelSnapshots(jobId, 0, 4, "9", "15", "", false, "snap_*,other_snap", future::onResponse, future::onFailure);
+        jobProvider.modelSnapshots(jobId, 0, 4, "9", "15", "", false, "snap_*,other_snap", null, future::onResponse, future::onFailure);
         snapshots = future.actionGet().results();
         assertThat(snapshots.get(0).getSnapshotId(), equalTo("snap_2"));
         assertThat(snapshots.get(1).getSnapshotId(), equalTo("snap_1"));
         assertThat(snapshots.get(2).getSnapshotId(), equalTo("other_snap"));
 
         future = new PlainActionFuture<>();
-        jobProvider.modelSnapshots(jobId, 0, 4, "9", "15", "", false, "*", future::onResponse, future::onFailure);
+        jobProvider.modelSnapshots(jobId, 0, 4, "9", "15", "", false, "*", null, future::onResponse, future::onFailure);
         snapshots = future.actionGet().results();
         assertThat(snapshots.get(0).getSnapshotId(), equalTo("snap_2"));
         assertThat(snapshots.get(1).getSnapshotId(), equalTo("snap_1"));
         assertThat(snapshots.get(2).getSnapshotId(), equalTo("other_snap"));
 
         future = new PlainActionFuture<>();
-        jobProvider.modelSnapshots("*", 0, 5, null, null, "min_version", false, null, future::onResponse, future::onFailure);
+        jobProvider.modelSnapshots("*", 0, 5, null, null, "min_version", false, null, null, future::onResponse, future::onFailure);
         snapshots = future.actionGet().results();
-        assertThat(snapshots.get(0).getSnapshotId(), equalTo("11"));
-        assertThat(snapshots.get(1).getSnapshotId(), equalTo("snap_1"));
-        assertThat(snapshots.get(2).getSnapshotId(), equalTo("other_snap"));
-        assertThat(snapshots.get(3).getSnapshotId(), equalTo("snap_2"));
-        assertThat(snapshots.get(4).getSnapshotId(), equalTo("other_snap"));
+        assertThat(snapshots.get(0).getSnapshotId(), equalTo("other_snap"));
+        assertThat(snapshots.get(1).getSnapshotId(), equalTo("11"));
+        assertThat(snapshots.get(2).getSnapshotId(), equalTo("snap_1"));
+        assertThat(snapshots.get(3).getSnapshotId(), equalTo("other_snap"));
+        assertThat(snapshots.get(4).getSnapshotId(), equalTo("snap_2"));
 
         // assert that quantiles are not loaded
         assertNull(snapshots.get(0).getQuantiles());
@@ -730,6 +847,16 @@ public class JobResultsProviderIT extends MlSingleNodeTestCase {
         assertNull(snapshots.get(3).getQuantiles());
         assertNull(snapshots.get(4).getQuantiles());
 
+        // test get single snapshot
+        PlainActionFuture<Result<ModelSnapshot>> singleFuture = new PlainActionFuture<>();
+        jobProvider.getModelSnapshot(jobId, "snap_1", true, singleFuture::onResponse, singleFuture::onFailure);
+        ModelSnapshot withQuantiles = singleFuture.actionGet().result;
+        assertThat(withQuantiles.getQuantiles().getTimestamp().getTime(), equalTo(11L));
+
+        singleFuture = new PlainActionFuture<>();
+        jobProvider.getModelSnapshot(jobId, "snap_2", false, singleFuture::onResponse, singleFuture::onFailure);
+        ModelSnapshot withoutQuantiles = singleFuture.actionGet().result;
+        assertNull(withoutQuantiles.getQuantiles());
     }
 
     public void testGetAutodetectParams() throws Exception {
@@ -773,14 +900,11 @@ public class JobResultsProviderIT extends MlSingleNodeTestCase {
         Quantiles quantiles = new Quantiles(jobId, new Date(), "quantile-state");
         indexQuantiles(quantiles);
 
-        client().admin()
-            .indices()
-            .prepareRefresh(
-                MlMetaIndex.indexName(),
-                AnomalyDetectorsIndex.jobStateIndexPattern(),
-                AnomalyDetectorsIndex.jobResultsAliasedName(jobId)
-            )
-            .get();
+        indicesAdmin().prepareRefresh(
+            MlMetaIndex.indexName(),
+            AnomalyDetectorsIndex.jobStateIndexPattern(),
+            AnomalyDetectorsIndex.jobResultsAliasedName(jobId)
+        ).get();
 
         AutodetectParams params = getAutodetectParams(job.build(new Date()));
 
@@ -926,15 +1050,15 @@ public class JobResultsProviderIT extends MlSingleNodeTestCase {
                 bulkRequest.add(indexRequest);
             }
         }
-        BulkResponse response = bulkRequest.execute().actionGet();
+        BulkResponse response = bulkRequest.get();
         if (response.hasFailures()) {
             throw new IllegalStateException(Strings.toString(response));
         }
     }
 
-    private void indexDataCounts(DataCounts counts, String jobId) {
+    private void indexDataCounts(DataCounts counts, String jobId) throws InterruptedException {
         JobDataCountsPersister persister = new JobDataCountsPersister(client(), resultsPersisterService, auditor);
-        persister.persistDataCounts(jobId, counts);
+        persister.persistDataCounts(jobId, counts, true);
     }
 
     private void indexFilters(List<MlFilter> filters) throws IOException {
@@ -951,7 +1075,7 @@ public class JobResultsProviderIT extends MlSingleNodeTestCase {
                 bulkRequest.add(indexRequest);
             }
         }
-        bulkRequest.execute().actionGet();
+        bulkRequest.get();
     }
 
     private void indexModelSizeStats(ModelSizeStats modelSizeStats) {
@@ -1001,6 +1125,6 @@ public class JobResultsProviderIT extends MlSingleNodeTestCase {
                 bulkRequest.add(indexRequest);
             }
         }
-        bulkRequest.execute().actionGet();
+        bulkRequest.get();
     }
 }

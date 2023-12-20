@@ -77,26 +77,21 @@ public class AllocateActionTests extends AbstractActionTestCase<AllocateAction> 
         Integer numberOfReplicas = instance.getNumberOfReplicas();
         Integer totalShardsPerNode = instance.getTotalShardsPerNode();
         switch (randomIntBetween(0, 4)) {
-            case 0:
+            case 0 -> {
                 include = new HashMap<>(include);
                 include.put(randomAlphaOfLengthBetween(11, 15), randomAlphaOfLengthBetween(1, 20));
-                break;
-            case 1:
+            }
+            case 1 -> {
                 exclude = new HashMap<>(exclude);
                 exclude.put(randomAlphaOfLengthBetween(11, 15), randomAlphaOfLengthBetween(1, 20));
-                break;
-            case 2:
+            }
+            case 2 -> {
                 require = new HashMap<>(require);
                 require.put(randomAlphaOfLengthBetween(11, 15), randomAlphaOfLengthBetween(1, 20));
-                break;
-            case 3:
-                numberOfReplicas = randomIntBetween(11, 20);
-                break;
-            case 4:
-                totalShardsPerNode = randomIntBetween(11, 20);
-                break;
-            default:
-                throw new AssertionError("Illegal randomisation branch");
+            }
+            case 3 -> numberOfReplicas = randomIntBetween(11, 20);
+            case 4 -> totalShardsPerNode = randomIntBetween(11, 20);
+            default -> throw new AssertionError("Illegal randomisation branch");
         }
         return new AllocateAction(numberOfReplicas, totalShardsPerNode, include, exclude, require);
     }

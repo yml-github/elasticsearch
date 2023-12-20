@@ -109,40 +109,7 @@ public class ESLoggerUsageChecker {
         cr.accept(new ClassChecker(wrongUsageCallback, methodsToCheck), 0);
     }
 
-    public static class WrongLoggerUsage {
-        private final String className;
-        private final String methodName;
-        private final String logMethodName;
-        private final int line;
-        private final String errorMessage;
-
-        public WrongLoggerUsage(String className, String methodName, String logMethodName, int line, String errorMessage) {
-            this.className = className;
-            this.methodName = methodName;
-            this.logMethodName = logMethodName;
-            this.line = line;
-            this.errorMessage = errorMessage;
-        }
-
-        @Override
-        public String toString() {
-            return "WrongLoggerUsage{"
-                + "className='"
-                + className
-                + '\''
-                + ", methodName='"
-                + methodName
-                + '\''
-                + ", logMethodName='"
-                + logMethodName
-                + '\''
-                + ", line="
-                + line
-                + ", errorMessage='"
-                + errorMessage
-                + '\''
-                + '}';
-        }
+    public record WrongLoggerUsage(String className, String methodName, String logMethodName, int line, String errorMessage) {
 
         /**
          * Returns an error message that has the form of stack traces emitted by {@link Throwable#printStackTrace}
@@ -250,8 +217,7 @@ public class ESLoggerUsageChecker {
             int lineNumber = -1;
             for (int i = 0; i < insns.length; i++) {
                 AbstractInsnNode insn = insns[i];
-                if (insn instanceof LineNumberNode) {
-                    LineNumberNode lineNumberNode = (LineNumberNode) insn;
+                if (insn instanceof LineNumberNode lineNumberNode) {
                     lineNumber = lineNumberNode.line;
                 }
                 if (insn.getOpcode() == Opcodes.INVOKEINTERFACE) {
@@ -398,9 +364,8 @@ public class ESLoggerUsageChecker {
                 && argumentTypes[markerOffset + 1].equals(OBJECT_CLASS)) {
                     // MULTI-PARAM METHOD: debug(Marker?, String, Object p0, ...)
                     checkFixedArityArgs(methodNode, logMessageFrames[i], lineNumber, methodInsn, markerOffset + 0, lengthWithoutMarker - 1);
-                } else if ((lengthWithoutMarker == 1 || lengthWithoutMarker == 2) && lengthWithoutMarker == 2
-                    ? argumentTypes[markerOffset + 1].equals(THROWABLE_CLASS)
-                    : true) {
+                } else if (lengthWithoutMarker == 1
+                    || (lengthWithoutMarker == 2 && argumentTypes[markerOffset + 1].equals(THROWABLE_CLASS))) {
                         // all the rest: debug(Marker?, (Message|MessageSupplier|CharSequence|Object|String|Supplier), Throwable?)
                         checkFixedArityArgs(methodNode, logMessageFrames[i], lineNumber, methodInsn, markerOffset + 0, 0);
                     } else {
@@ -501,13 +466,12 @@ public class ESLoggerUsageChecker {
         }
 
         // counts how many times argAndField was called on the method chain
-        private int getChainedParams(AbstractInsnNode startNode) {
+        private static int getChainedParams(AbstractInsnNode startNode) {
             int c = 0;
             AbstractInsnNode current = startNode;
             while (current.getNext() != null) {
                 current = current.getNext();
-                if (current instanceof MethodInsnNode) {
-                    MethodInsnNode method = (MethodInsnNode) current;
+                if (current instanceof MethodInsnNode method) {
                     if (method.name.equals("argAndField")) {
                         c++;
                     }
@@ -656,8 +620,8 @@ public class ESLoggerUsageChecker {
         public BasicValue newOperation(AbstractInsnNode insnNode) throws AnalyzerException {
             if (insnNode.getOpcode() == Opcodes.LDC) {
                 Object constant = ((LdcInsnNode) insnNode).cst;
-                if (constant instanceof String) {
-                    return new PlaceHolderStringBasicValue(calculateNumberOfPlaceHolders((String) constant));
+                if (constant instanceof String s) {
+                    return new PlaceHolderStringBasicValue(calculateNumberOfPlaceHolders(s));
                 }
             }
             return super.newOperation(insnNode);
@@ -665,11 +629,9 @@ public class ESLoggerUsageChecker {
 
         @Override
         public BasicValue merge(BasicValue value1, BasicValue value2) {
-            if (value1 instanceof PlaceHolderStringBasicValue
-                && value2 instanceof PlaceHolderStringBasicValue
+            if (value1 instanceof PlaceHolderStringBasicValue c1
+                && value2 instanceof PlaceHolderStringBasicValue c2
                 && value1.equals(value2) == false) {
-                PlaceHolderStringBasicValue c1 = (PlaceHolderStringBasicValue) value1;
-                PlaceHolderStringBasicValue c2 = (PlaceHolderStringBasicValue) value2;
                 return new PlaceHolderStringBasicValue(Math.min(c1.minValue, c2.minValue), Math.max(c1.maxValue, c2.maxValue));
             }
             return super.merge(value1, value2);
@@ -702,8 +664,8 @@ public class ESLoggerUsageChecker {
                     return new IntegerConstantBasicValue(Type.INT_TYPE, ((IntInsnNode) insnNode).operand);
                 case Opcodes.LDC: {
                     Object constant = ((LdcInsnNode) insnNode).cst;
-                    if (constant instanceof Integer) {
-                        return new IntegerConstantBasicValue(Type.INT_TYPE, (Integer) constant);
+                    if (constant instanceof Integer integer) {
+                        return new IntegerConstantBasicValue(Type.INT_TYPE, integer);
                     } else {
                         return super.newOperation(insnNode);
                     }
@@ -715,13 +677,9 @@ public class ESLoggerUsageChecker {
 
         @Override
         public BasicValue merge(BasicValue value1, BasicValue value2) {
-            if (value1 instanceof IntegerConstantBasicValue && value2 instanceof IntegerConstantBasicValue) {
-                IntegerConstantBasicValue c1 = (IntegerConstantBasicValue) value1;
-                IntegerConstantBasicValue c2 = (IntegerConstantBasicValue) value2;
+            if (value1 instanceof IntegerConstantBasicValue c1 && value2 instanceof IntegerConstantBasicValue c2) {
                 return new IntegerConstantBasicValue(Type.INT_TYPE, Math.min(c1.minValue, c2.minValue), Math.max(c1.maxValue, c2.maxValue));
-            } else if (value1 instanceof ArraySizeBasicValue && value2 instanceof ArraySizeBasicValue) {
-                ArraySizeBasicValue c1 = (ArraySizeBasicValue) value1;
-                ArraySizeBasicValue c2 = (ArraySizeBasicValue) value2;
+            } else if (value1 instanceof ArraySizeBasicValue c1 && value2 instanceof ArraySizeBasicValue c2) {
                 return new ArraySizeBasicValue(Type.INT_TYPE, Math.min(c1.minValue, c2.minValue), Math.max(c1.maxValue, c2.maxValue));
             }
             return super.merge(value1, value2);
@@ -729,8 +687,7 @@ public class ESLoggerUsageChecker {
 
         @Override
         public BasicValue unaryOperation(AbstractInsnNode insnNode, BasicValue value) throws AnalyzerException {
-            if (insnNode.getOpcode() == Opcodes.ANEWARRAY && value instanceof IntegerConstantBasicValue) {
-                IntegerConstantBasicValue constantBasicValue = (IntegerConstantBasicValue) value;
+            if (insnNode.getOpcode() == Opcodes.ANEWARRAY && value instanceof IntegerConstantBasicValue constantBasicValue) {
                 String desc = ((TypeInsnNode) insnNode).desc;
                 return new ArraySizeBasicValue(
                     Type.getType("[" + Type.getObjectType(desc)),

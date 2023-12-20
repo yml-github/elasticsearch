@@ -187,21 +187,17 @@ public abstract class AbstractBytesReferenceTestCase extends ESTestCase {
         BytesRefBuilder target = new BytesRefBuilder();
         while (target.length() < pbr.length()) {
             switch (randomIntBetween(0, 10)) {
-                case 6:
-                case 5:
-                    target.append(new BytesRef(new byte[] { streamInput.readByte() }));
-                    break;
-                case 4:
-                case 3:
+                case 6, 5 -> target.append(new BytesRef(new byte[] { streamInput.readByte() }));
+                case 4, 3 -> {
                     BytesRef bytesRef = streamInput.readBytesRef(scaledRandomIntBetween(1, pbr.length() - target.length()));
                     target.append(bytesRef);
-                    break;
-                default:
+                }
+                default -> {
                     byte[] buffer = new byte[scaledRandomIntBetween(1, pbr.length() - target.length())];
                     int offset = scaledRandomIntBetween(0, buffer.length - 1);
                     int read = streamInput.read(buffer, offset, buffer.length - offset);
                     target.append(new BytesRef(buffer, offset, read));
-                    break;
+                }
             }
         }
         assertEquals(pbr.length(), target.length());
@@ -669,5 +665,21 @@ public abstract class AbstractBytesReferenceTestCase extends ESTestCase {
         });
         final byte missing = randomValueOtherThanMany(map::containsKey, ESTestCase::randomByte);
         assertEquals(-1, bytesReference.indexOf(missing, randomIntBetween(0, Math.max(0, size - 1))));
+    }
+
+    public void testWriteWithIterator() throws IOException {
+        final int length = randomIntBetween(1024, 1024 * 1024);
+        final byte[] bytes = new byte[length];
+        random().nextBytes(bytes);
+        final BytesReference bytesReference = newBytesReference(length);
+        final BytesRefIterator iterator = bytesReference.iterator();
+        BytesRef bytesRef;
+        int offset = 0;
+        while ((bytesRef = iterator.next()) != null) {
+            final int len = Math.min(bytesRef.length, length - offset);
+            System.arraycopy(bytes, offset, bytesRef.bytes, bytesRef.offset, len);
+            offset += len;
+        }
+        assertArrayEquals(bytes, BytesReference.toBytes(bytesReference));
     }
 }

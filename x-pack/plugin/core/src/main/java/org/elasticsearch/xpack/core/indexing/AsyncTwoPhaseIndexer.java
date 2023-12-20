@@ -45,6 +45,7 @@ public abstract class AsyncTwoPhaseIndexer<JobPosition, JobStats extends Indexer
     // min time to trigger delayed execution, this avoids scheduling tasks with super short amount of time
     private static final TimeValue MIN_THROTTLE_WAIT_TIME = TimeValue.timeValueMillis(10);
 
+    @SuppressWarnings("this-escape")
     private final ActionListener<SearchResponse> searchResponseListener = ActionListener.wrap(
         this::onSearchResponse,
         this::finishWithSearchFailure
@@ -66,7 +67,7 @@ public abstract class AsyncTwoPhaseIndexer<JobPosition, JobStats extends Indexer
     /**
      * Task wrapper for throttled execution, we need this wrapper in order to cancel and re-issue scheduled searches
      */
-    class ScheduledRunnable {
+    static class ScheduledRunnable {
         private final ThreadPool threadPool;
         private final Runnable command;
         private Scheduler.ScheduledCancellable scheduled;
@@ -77,16 +78,16 @@ public abstract class AsyncTwoPhaseIndexer<JobPosition, JobStats extends Indexer
             // with wrapping the command in RunOnce we ensure the command isn't executed twice, e.g. if the
             // future is already running and cancel returns true
             this.command = new RunOnce(command);
-            this.scheduled = threadPool.schedule(command::run, delay, ThreadPool.Names.GENERIC);
+            this.scheduled = threadPool.schedule(command, delay, threadPool.generic());
         }
 
         public void reschedule(TimeValue delay) {
             // note: cancel return true if the runnable is currently executing
             if (scheduled.cancel()) {
                 if (delay.duration() > 0) {
-                    scheduled = threadPool.schedule(command::run, delay, ThreadPool.Names.GENERIC);
+                    scheduled = threadPool.schedule(command, delay, threadPool.generic());
                 } else {
-                    threadPool.executor(ThreadPool.Names.GENERIC).execute(command::run);
+                    threadPool.generic().execute(command);
                 }
             }
         }
@@ -205,9 +206,7 @@ public abstract class AsyncTwoPhaseIndexer<JobPosition, JobStats extends Indexer
         synchronized (lock) {
             final IndexerState currentState = state.get();
             switch (currentState) {
-                case INDEXING:
-                case STOPPING:
-                case ABORTING:
+                case INDEXING, STOPPING, ABORTING -> {
                     logger.warn(
                         "Schedule was triggered for job ["
                             + getJobId()
@@ -217,15 +216,14 @@ public abstract class AsyncTwoPhaseIndexer<JobPosition, JobStats extends Indexer
                             + "]"
                     );
                     return false;
-
-                case STOPPED:
+                }
+                case STOPPED -> {
                     logger.debug("Schedule was triggered for job [" + getJobId() + "] but job is stopped.  Ignoring trigger.");
                     return false;
-
-                case STARTED:
+                }
+                case STARTED -> {
                     logger.debug("Schedule was triggered for job [" + getJobId() + "], state: [" + currentState + "]");
                     stats.incrementNumInvocations(1);
-
                     if (state.compareAndSet(IndexerState.STARTED, IndexerState.INDEXING)) {
                         // fire off the search. Note this is async, the method will return from here
                         threadPool.executor(ThreadPool.Names.GENERIC).execute(() -> {
@@ -253,10 +251,11 @@ public abstract class AsyncTwoPhaseIndexer<JobPosition, JobStats extends Indexer
                         logger.debug("Could not move from STARTED to INDEXING state because current state is [" + state.get() + "]");
                         return false;
                     }
-
-                default:
+                }
+                default -> {
                     logger.warn("Encountered unexpected state [" + currentState + "] while indexing");
                     throw new IllegalStateException("Job encountered an illegal state [" + currentState + "]");
+                }
             }
         }
     }
@@ -420,20 +419,17 @@ public abstract class AsyncTwoPhaseIndexer<JobPosition, JobStats extends Indexer
 
     private void finishWithSearchFailure(Exception exc) {
         stats.incrementSearchFailures();
-        onFailure(exc);
-        doSaveState(finishAndSetState(), position.get(), this::afterFinishOrFailure);
+        finishWithFailure(exc);
     }
 
     private void finishWithIndexingFailure(Exception exc) {
         stats.incrementIndexingFailures();
-        onFailure(exc);
-        doSaveState(finishAndSetState(), position.get(), this::afterFinishOrFailure);
+        finishWithFailure(exc);
     }
 
     private void finishWithFailure(Exception exc) {
         onFailure(exc);
-        finishAndSetState();
-        afterFinishOrFailure();
+        doSaveState(finishAndSetState(), position.get(), this::afterFinishOrFailure);
     }
 
     private IndexerState finishAndSetState() {

@@ -9,10 +9,9 @@
 package org.elasticsearch.ingest.useragent;
 
 import org.elasticsearch.ElasticsearchParseException;
-import org.elasticsearch.common.xcontent.LoggingDeprecationHandler;
-import org.elasticsearch.xcontent.NamedXContentRegistry;
 import org.elasticsearch.xcontent.XContentFactory;
 import org.elasticsearch.xcontent.XContentParser;
+import org.elasticsearch.xcontent.XContentParserConfiguration;
 import org.elasticsearch.xcontent.XContentType;
 
 import java.io.IOException;
@@ -49,59 +48,62 @@ final class UserAgentParser {
 
     private void init(InputStream regexStream) throws IOException {
         // EMPTY is safe here because we don't use namedObject
-        XContentParser yamlParser = XContentFactory.xContent(XContentType.YAML)
-            .createParser(NamedXContentRegistry.EMPTY, LoggingDeprecationHandler.INSTANCE, regexStream);
+        try (
+            XContentParser yamlParser = XContentFactory.xContent(XContentType.YAML)
+                .createParser(XContentParserConfiguration.EMPTY, regexStream)
+        ) {
 
-        XContentParser.Token token = yamlParser.nextToken();
+            XContentParser.Token token = yamlParser.nextToken();
 
-        if (token == XContentParser.Token.START_OBJECT) {
-            token = yamlParser.nextToken();
+            if (token == XContentParser.Token.START_OBJECT) {
+                token = yamlParser.nextToken();
 
-            for (; token != null; token = yamlParser.nextToken()) {
-                if (token == XContentParser.Token.FIELD_NAME && yamlParser.currentName().equals("user_agent_parsers")) {
-                    List<Map<String, String>> parserConfigurations = readParserConfigurations(yamlParser);
+                for (; token != null; token = yamlParser.nextToken()) {
+                    if (token == XContentParser.Token.FIELD_NAME && yamlParser.currentName().equals("user_agent_parsers")) {
+                        List<Map<String, String>> parserConfigurations = readParserConfigurations(yamlParser);
 
-                    for (Map<String, String> map : parserConfigurations) {
-                        uaPatterns.add(
-                            new UserAgentSubpattern(
-                                compilePattern(map.get("regex"), map.get("regex_flag")),
-                                map.get("family_replacement"),
-                                map.get("v1_replacement"),
-                                map.get("v2_replacement"),
-                                map.get("v3_replacement"),
-                                map.get("v4_replacement")
-                            )
-                        );
-                    }
-                } else if (token == XContentParser.Token.FIELD_NAME && yamlParser.currentName().equals("os_parsers")) {
-                    List<Map<String, String>> parserConfigurations = readParserConfigurations(yamlParser);
+                        for (Map<String, String> map : parserConfigurations) {
+                            uaPatterns.add(
+                                new UserAgentSubpattern(
+                                    compilePattern(map.get("regex"), map.get("regex_flag")),
+                                    map.get("family_replacement"),
+                                    map.get("v1_replacement"),
+                                    map.get("v2_replacement"),
+                                    map.get("v3_replacement"),
+                                    map.get("v4_replacement")
+                                )
+                            );
+                        }
+                    } else if (token == XContentParser.Token.FIELD_NAME && yamlParser.currentName().equals("os_parsers")) {
+                        List<Map<String, String>> parserConfigurations = readParserConfigurations(yamlParser);
 
-                    for (Map<String, String> map : parserConfigurations) {
-                        osPatterns.add(
-                            new UserAgentSubpattern(
-                                compilePattern(map.get("regex"), map.get("regex_flag")),
-                                map.get("os_replacement"),
-                                map.get("os_v1_replacement"),
-                                map.get("os_v2_replacement"),
-                                map.get("os_v3_replacement"),
-                                map.get("os_v4_replacement")
-                            )
-                        );
-                    }
-                } else if (token == XContentParser.Token.FIELD_NAME && yamlParser.currentName().equals("device_parsers")) {
-                    List<Map<String, String>> parserConfigurations = readParserConfigurations(yamlParser);
+                        for (Map<String, String> map : parserConfigurations) {
+                            osPatterns.add(
+                                new UserAgentSubpattern(
+                                    compilePattern(map.get("regex"), map.get("regex_flag")),
+                                    map.get("os_replacement"),
+                                    map.get("os_v1_replacement"),
+                                    map.get("os_v2_replacement"),
+                                    map.get("os_v3_replacement"),
+                                    map.get("os_v4_replacement")
+                                )
+                            );
+                        }
+                    } else if (token == XContentParser.Token.FIELD_NAME && yamlParser.currentName().equals("device_parsers")) {
+                        List<Map<String, String>> parserConfigurations = readParserConfigurations(yamlParser);
 
-                    for (Map<String, String> map : parserConfigurations) {
-                        devicePatterns.add(
-                            new UserAgentSubpattern(
-                                compilePattern(map.get("regex"), map.get("regex_flag")),
-                                map.get("device_replacement"),
-                                null,
-                                null,
-                                null,
-                                null
-                            )
-                        );
+                        for (Map<String, String> map : parserConfigurations) {
+                            devicePatterns.add(
+                                new UserAgentSubpattern(
+                                    compilePattern(map.get("regex"), map.get("regex_flag")),
+                                    map.get("device_replacement"),
+                                    null,
+                                    null,
+                                    null,
+                                    null
+                                )
+                            );
+                        }
                     }
                 }
             }
@@ -112,7 +114,7 @@ final class UserAgentParser {
         }
     }
 
-    private Pattern compilePattern(String regex, String regex_flag) {
+    private static Pattern compilePattern(String regex, String regex_flag) {
         // Only flag present in the current default regexes.yaml
         if (regex_flag != null && regex_flag.equals("i")) {
             return Pattern.compile(regex, Pattern.CASE_INSENSITIVE);
@@ -189,7 +191,7 @@ final class UserAgentParser {
         return details;
     }
 
-    private VersionedName findMatch(List<UserAgentSubpattern> possiblePatterns, String agentString) {
+    private static VersionedName findMatch(List<UserAgentSubpattern> possiblePatterns, String agentString) {
         VersionedName versionedName;
         for (UserAgentSubpattern pattern : possiblePatterns) {
             versionedName = pattern.match(agentString);
@@ -202,58 +204,21 @@ final class UserAgentParser {
         return null;
     }
 
-    static final class Details {
-        public final VersionedName userAgent;
-        public final VersionedName operatingSystem;
-        public final VersionedName device;
-        public final String deviceType;
+    record Details(VersionedName userAgent, VersionedName operatingSystem, VersionedName device, String deviceType) {}
 
-        Details(VersionedName userAgent, VersionedName operatingSystem, VersionedName device, String deviceType) {
-            this.userAgent = userAgent;
-            this.operatingSystem = operatingSystem;
-            this.device = device;
-            this.deviceType = deviceType;
-        }
-    }
-
-    static final class VersionedName {
-        public final String name;
-        public final String major;
-        public final String minor;
-        public final String patch;
-        public final String build;
-
-        VersionedName(String name, String major, String minor, String patch, String build) {
-            this.name = name;
-            this.major = major;
-            this.minor = minor;
-            this.patch = patch;
-            this.build = build;
-        }
-    }
+    record VersionedName(String name, String major, String minor, String patch, String build) {}
 
     /**
      * One of: user agent, operating system, device
      */
-    static final class UserAgentSubpattern {
-        private final Pattern pattern;
-        private final String nameReplacement, v1Replacement, v2Replacement, v3Replacement, v4Replacement;
-
-        UserAgentSubpattern(
-            Pattern pattern,
-            String nameReplacement,
-            String v1Replacement,
-            String v2Replacement,
-            String v3Replacement,
-            String v4Replacement
-        ) {
-            this.pattern = pattern;
-            this.nameReplacement = nameReplacement;
-            this.v1Replacement = v1Replacement;
-            this.v2Replacement = v2Replacement;
-            this.v3Replacement = v3Replacement;
-            this.v4Replacement = v4Replacement;
-        }
+    record UserAgentSubpattern(
+        Pattern pattern,
+        String nameReplacement,
+        String v1Replacement,
+        String v2Replacement,
+        String v3Replacement,
+        String v4Replacement
+    ) {
 
         public VersionedName match(String agentString) {
             String name = null, major = null, minor = null, patch = null, build = null;

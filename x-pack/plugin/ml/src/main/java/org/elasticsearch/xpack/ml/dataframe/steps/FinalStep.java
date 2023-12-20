@@ -9,14 +9,13 @@ package org.elasticsearch.xpack.ml.dataframe.steps;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-import org.apache.logging.log4j.message.ParameterizedMessage;
 import org.elasticsearch.action.ActionListener;
+import org.elasticsearch.action.DocWriteResponse;
 import org.elasticsearch.action.admin.indices.refresh.RefreshAction;
 import org.elasticsearch.action.admin.indices.refresh.RefreshRequest;
 import org.elasticsearch.action.admin.indices.refresh.RefreshResponse;
-import org.elasticsearch.action.index.IndexAction;
 import org.elasticsearch.action.index.IndexRequest;
-import org.elasticsearch.action.index.IndexResponse;
+import org.elasticsearch.action.index.TransportIndexAction;
 import org.elasticsearch.action.support.IndicesOptions;
 import org.elasticsearch.client.internal.node.NodeClient;
 import org.elasticsearch.core.TimeValue;
@@ -36,6 +35,7 @@ import java.io.IOException;
 import java.util.Arrays;
 import java.util.Collections;
 
+import static org.elasticsearch.core.Strings.format;
 import static org.elasticsearch.xpack.core.ClientHelper.ML_ORIGIN;
 import static org.elasticsearch.xpack.core.ClientHelper.executeAsyncWithOrigin;
 
@@ -65,7 +65,7 @@ public class FinalStep extends AbstractDataFrameAnalyticsStep {
             listener::onFailure
         );
 
-        ActionListener<IndexResponse> dataCountsIndexedListener = ActionListener.wrap(
+        ActionListener<DocWriteResponse> dataCountsIndexedListener = ActionListener.wrap(
             indexResponse -> refreshIndices(refreshListener),
             listener::onFailure
         );
@@ -73,7 +73,7 @@ public class FinalStep extends AbstractDataFrameAnalyticsStep {
         indexDataCounts(dataCountsIndexedListener);
     }
 
-    private void indexDataCounts(ActionListener<IndexResponse> listener) {
+    private void indexDataCounts(ActionListener<DocWriteResponse> listener) {
         DataCounts dataCounts = task.getStatsHolder().getDataCountsTracker().report();
         try (XContentBuilder builder = XContentFactory.jsonBuilder()) {
             dataCounts.toXContent(
@@ -83,7 +83,7 @@ public class FinalStep extends AbstractDataFrameAnalyticsStep {
             IndexRequest indexRequest = new IndexRequest(MlStatsIndex.writeAlias()).id(DataCounts.documentId(config.getId()))
                 .setRequireAlias(true)
                 .source(builder);
-            executeAsyncWithOrigin(parentTaskClient(), ML_ORIGIN, IndexAction.INSTANCE, indexRequest, listener);
+            executeAsyncWithOrigin(parentTaskClient(), ML_ORIGIN, TransportIndexAction.TYPE, indexRequest, listener);
         } catch (IOException e) {
             listener.onFailure(ExceptionsHelper.serverError("[{}] Error persisting final data counts", e, config.getId()));
         }
@@ -97,9 +97,7 @@ public class FinalStep extends AbstractDataFrameAnalyticsStep {
         );
         refreshRequest.indicesOptions(IndicesOptions.lenientExpandOpen());
 
-        LOGGER.debug(
-            () -> new ParameterizedMessage("[{}] Refreshing indices {}", config.getId(), Arrays.toString(refreshRequest.indices()))
-        );
+        LOGGER.debug(() -> format("[%s] Refreshing indices %s", config.getId(), Arrays.toString(refreshRequest.indices())));
 
         executeAsyncWithOrigin(parentTaskClient(), ML_ORIGIN, RefreshAction.INSTANCE, refreshRequest, listener);
     }

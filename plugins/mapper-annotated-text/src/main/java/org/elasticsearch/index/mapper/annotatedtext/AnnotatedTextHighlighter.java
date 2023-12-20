@@ -17,14 +17,14 @@ import org.elasticsearch.index.mapper.annotatedtext.AnnotatedTextFieldMapper.Ann
 import org.elasticsearch.index.query.SearchExecutionContext;
 import org.elasticsearch.lucene.search.uhighlight.CustomUnifiedHighlighter;
 import org.elasticsearch.search.fetch.FetchSubPhase.HitContext;
+import org.elasticsearch.search.fetch.subphase.highlight.DefaultHighlighter;
 import org.elasticsearch.search.fetch.subphase.highlight.SearchHighlightContext;
-import org.elasticsearch.search.fetch.subphase.highlight.UnifiedHighlighter;
 
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 
-public class AnnotatedTextHighlighter extends UnifiedHighlighter {
+public class AnnotatedTextHighlighter extends DefaultHighlighter {
 
     public static final String NAME = "annotated";
 
@@ -34,16 +34,15 @@ public class AnnotatedTextHighlighter extends UnifiedHighlighter {
         CustomUnifiedHighlighter highlighter,
         SearchExecutionContext searchContext,
         MappedFieldType fieldType,
-        HitContext hitContext,
-        boolean forceSource
+        HitContext hitContext
     ) throws IOException {
-        List<Object> fieldValues = super.loadFieldValues(highlighter, searchContext, fieldType, hitContext, forceSource);
+        List<Object> fieldValues = super.loadFieldValues(highlighter, searchContext, fieldType, hitContext);
 
         List<Object> strings = new ArrayList<>(fieldValues.size());
         AnnotatedText[] annotations = new AnnotatedText[fieldValues.size()];
         for (int i = 0; i < fieldValues.size(); i++) {
             annotations[i] = AnnotatedText.parse(fieldValues.get(i).toString());
-            strings.add(annotations[i].textMinusMarkup);
+            strings.add(annotations[i].textMinusMarkup());
         }
         // Store the annotations in the formatter and analyzer
         ((AnnotatedPassageFormatter) highlighter.getFormatter()).setAnnotations(annotations);
@@ -57,7 +56,7 @@ public class AnnotatedTextHighlighter extends UnifiedHighlighter {
     }
 
     @Override
-    protected PassageFormatter getPassageFormatter(HitContext hitContext, SearchHighlightContext.Field field, Encoder encoder) {
+    protected PassageFormatter getPassageFormatter(SearchHighlightContext.Field field, Encoder encoder) {
         return new AnnotatedPassageFormatter(encoder);
     }
 

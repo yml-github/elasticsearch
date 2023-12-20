@@ -16,21 +16,32 @@ import org.elasticsearch.search.SearchHits;
 import org.elasticsearch.search.aggregations.InternalAggregations;
 import org.elasticsearch.search.profile.SearchProfileResults;
 import org.elasticsearch.search.suggest.Suggest;
-import org.elasticsearch.xcontent.ToXContentFragment;
 
 import java.io.IOException;
 
 /**
  * {@link SearchResponseSections} subclass that can be serialized over the wire.
  */
-public class InternalSearchResponse extends SearchResponseSections implements Writeable, ToXContentFragment {
-    public static InternalSearchResponse empty() {
-        return empty(true);
-    }
+public class InternalSearchResponse extends SearchResponseSections implements Writeable {
+    public static final InternalSearchResponse EMPTY_WITH_TOTAL_HITS = new InternalSearchResponse(
+        SearchHits.EMPTY_WITH_TOTAL_HITS,
+        null,
+        null,
+        null,
+        false,
+        null,
+        1
+    );
 
-    public static InternalSearchResponse empty(boolean withTotalHits) {
-        return new InternalSearchResponse(SearchHits.empty(withTotalHits), null, null, null, false, null, 1);
-    }
+    public static final InternalSearchResponse EMPTY_WITHOUT_TOTAL_HITS = new InternalSearchResponse(
+        SearchHits.EMPTY_WITHOUT_TOTAL_HITS,
+        null,
+        null,
+        null,
+        false,
+        null,
+        1
+    );
 
     public InternalSearchResponse(
         SearchHits hits,

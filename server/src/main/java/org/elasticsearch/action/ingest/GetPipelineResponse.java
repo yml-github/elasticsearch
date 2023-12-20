@@ -13,9 +13,9 @@ import org.elasticsearch.common.Strings;
 import org.elasticsearch.common.bytes.BytesReference;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
-import org.elasticsearch.common.xcontent.StatusToXContentObject;
 import org.elasticsearch.ingest.PipelineConfiguration;
 import org.elasticsearch.rest.RestStatus;
+import org.elasticsearch.xcontent.ToXContentObject;
 import org.elasticsearch.xcontent.XContentBuilder;
 import org.elasticsearch.xcontent.XContentParser;
 import org.elasticsearch.xcontent.XContentParser.Token;
@@ -29,9 +29,9 @@ import java.util.Map;
 
 import static org.elasticsearch.common.xcontent.XContentParserUtils.ensureExpectedToken;
 
-public class GetPipelineResponse extends ActionResponse implements StatusToXContentObject {
+public class GetPipelineResponse extends ActionResponse implements ToXContentObject {
 
-    private List<PipelineConfiguration> pipelines;
+    private final List<PipelineConfiguration> pipelines;
     private final boolean summary;
 
     public GetPipelineResponse(StreamInput in) throws IOException {
@@ -64,10 +64,7 @@ public class GetPipelineResponse extends ActionResponse implements StatusToXCont
 
     @Override
     public void writeTo(StreamOutput out) throws IOException {
-        out.writeVInt(pipelines.size());
-        for (PipelineConfiguration pipeline : pipelines) {
-            pipeline.writeTo(out);
-        }
+        out.writeCollection(pipelines);
         out.writeBoolean(summary);
     }
 
@@ -79,7 +76,6 @@ public class GetPipelineResponse extends ActionResponse implements StatusToXCont
         return summary;
     }
 
-    @Override
     public RestStatus status() {
         return isFound() ? RestStatus.OK : RestStatus.NOT_FOUND;
     }
@@ -124,8 +120,7 @@ public class GetPipelineResponse extends ActionResponse implements StatusToXCont
     public boolean equals(Object other) {
         if (other == null) {
             return false;
-        } else if (other instanceof GetPipelineResponse) {
-            GetPipelineResponse otherResponse = (GetPipelineResponse) other;
+        } else if (other instanceof GetPipelineResponse otherResponse) {
             if (pipelines == null) {
                 return otherResponse.pipelines == null;
             } else {
@@ -139,6 +134,10 @@ public class GetPipelineResponse extends ActionResponse implements StatusToXCont
                     if (pipeline.equals(otherPipeline) == false) {
                         return false;
                     }
+                    otherPipelineMap.remove(pipeline.getId());
+                }
+                if (otherPipelineMap.isEmpty() == false) {
+                    return false;
                 }
                 return true;
             }

@@ -6,9 +6,6 @@
  */
 package org.elasticsearch.xpack.ccr.action;
 
-import com.carrotsearch.hppc.cursors.ObjectObjectCursor;
-
-import org.elasticsearch.Version;
 import org.elasticsearch.action.admin.cluster.state.ClusterStateResponse;
 import org.elasticsearch.action.support.replication.ClusterStateCreationUtils;
 import org.elasticsearch.client.internal.Client;
@@ -16,6 +13,7 @@ import org.elasticsearch.cluster.ClusterName;
 import org.elasticsearch.cluster.ClusterState;
 import org.elasticsearch.cluster.metadata.DataStream;
 import org.elasticsearch.cluster.metadata.DataStreamTestHelper;
+import org.elasticsearch.cluster.metadata.IndexAbstraction;
 import org.elasticsearch.cluster.metadata.IndexMetadata;
 import org.elasticsearch.cluster.metadata.Metadata;
 import org.elasticsearch.cluster.routing.IndexRoutingTable;
@@ -28,14 +26,19 @@ import org.elasticsearch.common.UUIDs;
 import org.elasticsearch.common.settings.ClusterSettings;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.unit.ByteSizeValue;
+import org.elasticsearch.common.util.Maps;
 import org.elasticsearch.common.util.concurrent.ConcurrentCollections;
 import org.elasticsearch.common.util.concurrent.EsRejectedExecutionException;
 import org.elasticsearch.core.TimeValue;
 import org.elasticsearch.core.Tuple;
 import org.elasticsearch.index.Index;
+import org.elasticsearch.index.IndexMode;
 import org.elasticsearch.index.IndexSettings;
+import org.elasticsearch.index.IndexVersion;
+import org.elasticsearch.index.IndexVersions;
+import org.elasticsearch.index.shard.ShardId;
 import org.elasticsearch.test.ESTestCase;
-import org.elasticsearch.test.VersionUtils;
+import org.elasticsearch.test.index.IndexVersionUtils;
 import org.elasticsearch.xpack.ccr.Ccr;
 import org.elasticsearch.xpack.ccr.CcrLicenseChecker;
 import org.elasticsearch.xpack.ccr.CcrSettings;
@@ -50,7 +53,6 @@ import org.elasticsearch.xpack.core.ccr.action.PutFollowAction;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
-import java.util.Comparator;
 import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.List;
@@ -74,6 +76,7 @@ import static org.elasticsearch.xpack.ccr.action.AutoFollowCoordinator.AutoFollo
 import static org.elasticsearch.xpack.ccr.action.AutoFollowCoordinator.AutoFollower.recordLeaderIndexAsFollowFunction;
 import static org.hamcrest.Matchers.anEmptyMap;
 import static org.hamcrest.Matchers.containsInAnyOrder;
+import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.empty;
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.greaterThan;
@@ -84,6 +87,7 @@ import static org.hamcrest.Matchers.notNullValue;
 import static org.hamcrest.Matchers.nullValue;
 import static org.hamcrest.Matchers.sameInstance;
 import static org.hamcrest.Matchers.startsWith;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -92,7 +96,7 @@ public class AutoFollowCoordinatorTests extends ESTestCase {
 
     public void testAutoFollower() {
         Client client = mock(Client.class);
-        when(client.getRemoteClusterClient(anyString())).thenReturn(client);
+        when(client.getRemoteClusterClient(anyString(), any())).thenReturn(client);
 
         ClusterState remoteState = createRemoteClusterState("logs-20190101", true);
 
@@ -162,7 +166,7 @@ public class AutoFollowCoordinatorTests extends ESTestCase {
 
     public void testAutoFollower_dataStream() {
         Client client = mock(Client.class);
-        when(client.getRemoteClusterClient(anyString())).thenReturn(client);
+        when(client.getRemoteClusterClient(anyString(), any())).thenReturn(client);
 
         ClusterState remoteState = createRemoteClusterStateWithDataStream("logs-foobar");
 
@@ -232,7 +236,7 @@ public class AutoFollowCoordinatorTests extends ESTestCase {
 
     public void testAutoFollowerClusterStateApiFailure() {
         Client client = mock(Client.class);
-        when(client.getRemoteClusterClient(anyString())).thenReturn(client);
+        when(client.getRemoteClusterClient(anyString(), any())).thenReturn(client);
 
         AutoFollowPattern autoFollowPattern = createAutoFollowPattern("remote", "logs-*");
         Map<String, AutoFollowPattern> patterns = new HashMap<>();
@@ -281,7 +285,7 @@ public class AutoFollowCoordinatorTests extends ESTestCase {
 
     public void testAutoFollowerUpdateClusterStateFailure() {
         Client client = mock(Client.class);
-        when(client.getRemoteClusterClient(anyString())).thenReturn(client);
+        when(client.getRemoteClusterClient(anyString(), any())).thenReturn(client);
         ClusterState remoteState = createRemoteClusterState("logs-20190101", true);
 
         AutoFollowPattern autoFollowPattern = createAutoFollowPattern("remote", "logs-*");
@@ -339,7 +343,7 @@ public class AutoFollowCoordinatorTests extends ESTestCase {
     public void testAutoFollowerWithNoActivePatternsDoesNotStart() {
         final String remoteCluster = randomAlphaOfLength(5);
 
-        final Map<String, AutoFollowPattern> autoFollowPatterns = new HashMap<>(2);
+        final Map<String, AutoFollowPattern> autoFollowPatterns = Maps.newMapWithExpectedSize(2);
         autoFollowPatterns.put(
             "pattern_1",
             new AutoFollowPattern(
@@ -383,11 +387,11 @@ public class AutoFollowCoordinatorTests extends ESTestCase {
             )
         );
 
-        final Map<String, List<String>> followedLeaderIndexUUIDs = new HashMap<>(2);
+        final Map<String, List<String>> followedLeaderIndexUUIDs = Maps.newMapWithExpectedSize(2);
         followedLeaderIndexUUIDs.put("pattern_1", List.of("uuid1", "uuid2"));
         followedLeaderIndexUUIDs.put("pattern_2", Collections.emptyList());
 
-        final Map<String, Map<String, String>> headers = new HashMap<>(2);
+        final Map<String, Map<String, String>> headers = Maps.newMapWithExpectedSize(2);
         headers.put("pattern_1", singletonMap("header", "value"));
         headers.put("pattern_2", emptyMap());
 
@@ -644,7 +648,7 @@ public class AutoFollowCoordinatorTests extends ESTestCase {
 
     public void testAutoFollowerCreateAndFollowApiCallFailure() {
         Client client = mock(Client.class);
-        when(client.getRemoteClusterClient(anyString())).thenReturn(client);
+        when(client.getRemoteClusterClient(anyString(), any())).thenReturn(client);
         ClusterState remoteState = createRemoteClusterState("logs-20190101", true);
 
         AutoFollowPattern autoFollowPattern = createAutoFollowPattern("remote", "logs-*");
@@ -712,21 +716,25 @@ public class AutoFollowCoordinatorTests extends ESTestCase {
         for (int i = 0; i < 5; i++) {
             String indexName = "metrics-" + i;
             Settings.Builder builder = Settings.builder()
-                .put(IndexMetadata.SETTING_VERSION_CREATED, Version.CURRENT)
+                .put(IndexMetadata.SETTING_VERSION_CREATED, IndexVersion.current())
                 .put(IndexMetadata.SETTING_INDEX_UUID, indexName);
-            imdBuilder.put(IndexMetadata.builder("metrics-" + i).settings(builder).numberOfShards(1).numberOfReplicas(0));
+            imdBuilder.put(IndexMetadata.builder(indexName).settings(builder).numberOfShards(1).numberOfReplicas(0));
 
-            ShardRouting shardRouting = TestShardRouting.newShardRouting(indexName, 0, "1", true, ShardRoutingState.INITIALIZING)
-                .moveToStarted();
+            ShardRouting shardRouting = TestShardRouting.newShardRouting(
+                new ShardId(imdBuilder.get(indexName).getIndex(), 0),
+                "1",
+                true,
+                ShardRoutingState.INITIALIZING
+            ).moveToStarted(ShardRouting.UNAVAILABLE_EXPECTED_SHARD_SIZE);
             IndexRoutingTable indexRoutingTable = IndexRoutingTable.builder(imdBuilder.get(indexName).getIndex())
                 .addShard(shardRouting)
                 .build();
             routingTableBuilder.add(indexRoutingTable);
         }
 
-        imdBuilder.put(IndexMetadata.builder("logs-0").settings(settings(Version.CURRENT)).numberOfShards(1).numberOfReplicas(0));
+        imdBuilder.put(IndexMetadata.builder("logs-0").settings(settings(IndexVersion.current())).numberOfShards(1).numberOfReplicas(0));
         ShardRouting shardRouting = TestShardRouting.newShardRouting("logs-0", 0, "1", true, ShardRoutingState.INITIALIZING)
-            .moveToStarted();
+            .moveToStarted(ShardRouting.UNAVAILABLE_EXPECTED_SHARD_SIZE);
         IndexRoutingTable indexRoutingTable = IndexRoutingTable.builder(imdBuilder.get("logs-0").getIndex()).addShard(shardRouting).build();
         routingTableBuilder.add(indexRoutingTable);
 
@@ -736,7 +744,7 @@ public class AutoFollowCoordinatorTests extends ESTestCase {
             .build();
 
         List<Index> result = AutoFollower.getLeaderIndicesToFollow(autoFollowPattern, remoteState, Collections.emptyList());
-        result.sort(Comparator.comparing(Index::getName));
+        result.sort(Index.COMPARE_BY_NAME);
         assertThat(result.size(), equalTo(5));
         assertThat(result.get(0).getName(), equalTo("metrics-0"));
         assertThat(result.get(1).getName(), equalTo("metrics-1"));
@@ -746,7 +754,7 @@ public class AutoFollowCoordinatorTests extends ESTestCase {
 
         final List<String> followedIndexUUIDs = Collections.singletonList(remoteState.metadata().index("metrics-2").getIndexUUID());
         result = AutoFollower.getLeaderIndicesToFollow(autoFollowPattern, remoteState, followedIndexUUIDs);
-        result.sort(Comparator.comparing(Index::getName));
+        result.sort(Index.COMPARE_BY_NAME);
         assertThat(result.size(), equalTo(4));
         assertThat(result.get(0).getName(), equalTo("metrics-0"));
         assertThat(result.get(1).getName(), equalTo("metrics-1"));
@@ -785,7 +793,7 @@ public class AutoFollowCoordinatorTests extends ESTestCase {
         // 1 shard started and another not started:
         ClusterState remoteState = createRemoteClusterState("index1", true);
         Metadata.Builder mBuilder = Metadata.builder(remoteState.metadata());
-        mBuilder.put(IndexMetadata.builder("index2").settings(settings(Version.CURRENT)).numberOfShards(1).numberOfReplicas(0));
+        mBuilder.put(IndexMetadata.builder("index2").settings(settings(IndexVersion.current())).numberOfShards(1).numberOfReplicas(0));
         ShardRouting shardRouting = TestShardRouting.newShardRouting("index2", 0, "1", true, ShardRoutingState.INITIALIZING);
         IndexRoutingTable indexRoutingTable = IndexRoutingTable.builder(mBuilder.get("index2").getIndex()).addShard(shardRouting).build();
         remoteState = ClusterState.builder(remoteState.getClusterName())
@@ -798,7 +806,7 @@ public class AutoFollowCoordinatorTests extends ESTestCase {
         assertThat(result.get(0).getName(), equalTo("index1"));
 
         // Start second shard:
-        shardRouting = shardRouting.moveToStarted();
+        shardRouting = shardRouting.moveToStarted(ShardRouting.UNAVAILABLE_EXPECTED_SHARD_SIZE);
         indexRoutingTable = IndexRoutingTable.builder(remoteState.metadata().indices().get("index2").getIndex())
             .addShard(shardRouting)
             .build();
@@ -809,7 +817,7 @@ public class AutoFollowCoordinatorTests extends ESTestCase {
 
         result = AutoFollower.getLeaderIndicesToFollow(autoFollowPattern, remoteState, Collections.emptyList());
         assertThat(result.size(), equalTo(2));
-        result.sort(Comparator.comparing(Index::getName));
+        result.sort(Index.COMPARE_BY_NAME);
         assertThat(result.get(0).getName(), equalTo("index1"));
         assertThat(result.get(1).getName(), equalTo("index2"));
     }
@@ -880,13 +888,13 @@ public class AutoFollowCoordinatorTests extends ESTestCase {
 
         Metadata remoteMetadata = new Metadata.Builder().put(
             IndexMetadata.builder("index1")
-                .settings(settings(Version.CURRENT).put(IndexMetadata.SETTING_INDEX_UUID, "index1"))
+                .settings(settings(IndexVersion.current()).put(IndexMetadata.SETTING_INDEX_UUID, "index1"))
                 .numberOfShards(1)
                 .numberOfReplicas(0)
         )
             .put(
                 IndexMetadata.builder("index3")
-                    .settings(settings(Version.CURRENT).put(IndexMetadata.SETTING_INDEX_UUID, "index3"))
+                    .settings(settings(IndexVersion.current()).put(IndexMetadata.SETTING_INDEX_UUID, "index3"))
                     .numberOfShards(1)
                     .numberOfReplicas(0)
             )
@@ -911,19 +919,19 @@ public class AutoFollowCoordinatorTests extends ESTestCase {
 
         Metadata remoteMetadata = new Metadata.Builder().put(
             IndexMetadata.builder("index1")
-                .settings(settings(Version.CURRENT).put(IndexMetadata.SETTING_INDEX_UUID, "index1"))
+                .settings(settings(IndexVersion.current()).put(IndexMetadata.SETTING_INDEX_UUID, "index1"))
                 .numberOfShards(1)
                 .numberOfReplicas(0)
         )
             .put(
                 IndexMetadata.builder("index2")
-                    .settings(settings(Version.CURRENT).put(IndexMetadata.SETTING_INDEX_UUID, "index2"))
+                    .settings(settings(IndexVersion.current()).put(IndexMetadata.SETTING_INDEX_UUID, "index2"))
                     .numberOfShards(1)
                     .numberOfReplicas(0)
             )
             .put(
                 IndexMetadata.builder("index3")
-                    .settings(settings(Version.CURRENT).put(IndexMetadata.SETTING_INDEX_UUID, "index3"))
+                    .settings(settings(IndexVersion.current()).put(IndexMetadata.SETTING_INDEX_UUID, "index3"))
                     .numberOfShards(1)
                     .numberOfReplicas(0)
             )
@@ -945,7 +953,7 @@ public class AutoFollowCoordinatorTests extends ESTestCase {
         ).build();
 
         Metadata remoteMetadata = new Metadata.Builder().put(
-            IndexMetadata.builder("index1").settings(settings(Version.CURRENT)).numberOfShards(1).numberOfReplicas(0)
+            IndexMetadata.builder("index1").settings(settings(IndexVersion.current())).numberOfShards(1).numberOfReplicas(0)
         ).build();
 
         Function<ClusterState, ClusterState> function = cleanFollowedRemoteIndices(remoteMetadata, Collections.singletonList("pattern1"));
@@ -997,6 +1005,321 @@ public class AutoFollowCoordinatorTests extends ESTestCase {
             null
         );
         assertThat(AutoFollower.getFollowerIndexName(autoFollowPattern, "metrics-0"), equalTo("eu-metrics-0"));
+
+        // Test that index of data stream type name works correctly:
+        autoFollowPattern = new AutoFollowPattern(
+            "remote",
+            List.of("logs-*"),
+            List.of(),
+            "{{leader_index}}_copy",
+            Settings.EMPTY,
+            true,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+        );
+        assertThat(
+            AutoFollower.getFollowerIndexName(autoFollowPattern, ".ds-logs-foo-bar-2022-02-01-123456"),
+            equalTo(".ds-logs-foo-bar_copy-2022-02-01-123456")
+        );
+
+        autoFollowPattern = new AutoFollowPattern(
+            "remote",
+            List.of("logs-*"),
+            List.of(),
+            "prepend_{{leader_index}}",
+            Settings.EMPTY,
+            true,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+        );
+        assertThat(
+            AutoFollower.getFollowerIndexName(autoFollowPattern, ".ds-logs-foo-bar-2022-02-01-123456"),
+            equalTo(".ds-prepend_logs-foo-bar-2022-02-01-123456")
+        );
+
+    }
+
+    public void testGenerateRequest() {
+        // Renaming with a suffix and normal pattern backing indices
+        {
+            AutoFollowPattern pattern = new AutoFollowPattern(
+                "remote",
+                List.of("logs-*"),
+                List.of(),
+                "{{leader_index}}_copy",
+                Settings.EMPTY,
+                true,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+            );
+
+            Index index = new Index(".ds-logs-foo-bar-2022-02-01-123456", "uuid");
+            IndexAbstraction indexAbstraction = new IndexAbstraction.ConcreteIndex(
+                IndexMetadata.builder(index.getName())
+                    .settings(
+                        Settings.builder()
+                            .put(IndexMetadata.SETTING_NUMBER_OF_SHARDS, 1)
+                            .put(IndexMetadata.SETTING_NUMBER_OF_REPLICAS, 1)
+                            .put(IndexMetadata.SETTING_VERSION_CREATED, IndexVersion.current())
+                            .put(IndexMetadata.SETTING_INDEX_UUID, index.getUUID())
+                            .build()
+                    )
+                    .build(),
+                new DataStream("logs-foo-bar", List.of(index), 1, Map.of(), false, false, false, true, IndexMode.STANDARD)
+            );
+
+            PutFollowAction.Request request = AutoFollower.generateRequest("remote", index, indexAbstraction, pattern);
+            assertThat(request.getRemoteCluster(), equalTo("remote"));
+            assertThat(request.getFollowerIndex(), equalTo(".ds-logs-foo-bar_copy-2022-02-01-123456"));
+            assertThat(request.getLeaderIndex(), equalTo(".ds-logs-foo-bar-2022-02-01-123456"));
+            assertThat(request.getDataStreamName(), equalTo("logs-foo-bar_copy"));
+        }
+
+        // Renaming with a prefix and normal pattern backing indices
+        {
+            AutoFollowPattern pattern = new AutoFollowPattern(
+                "remote",
+                List.of("logs-*"),
+                List.of(),
+                "copy_{{leader_index}}",
+                Settings.EMPTY,
+                true,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+            );
+
+            Index index = new Index(".ds-logs-foo-bar-2022-02-01-123456", "uuid");
+            IndexAbstraction indexAbstraction = new IndexAbstraction.ConcreteIndex(
+                IndexMetadata.builder(index.getName())
+                    .settings(
+                        Settings.builder()
+                            .put(IndexMetadata.SETTING_NUMBER_OF_SHARDS, 1)
+                            .put(IndexMetadata.SETTING_NUMBER_OF_REPLICAS, 1)
+                            .put(IndexMetadata.SETTING_VERSION_CREATED, IndexVersion.current())
+                            .put(IndexMetadata.SETTING_INDEX_UUID, index.getUUID())
+                            .build()
+                    )
+                    .build(),
+                new DataStream("logs-foo-bar", List.of(index), 1, Map.of(), false, false, false, true, IndexMode.STANDARD)
+            );
+
+            PutFollowAction.Request request = AutoFollower.generateRequest("remote", index, indexAbstraction, pattern);
+            assertThat(request.getRemoteCluster(), equalTo("remote"));
+            assertThat(request.getFollowerIndex(), equalTo(".ds-copy_logs-foo-bar-2022-02-01-123456"));
+            assertThat(request.getLeaderIndex(), equalTo(".ds-logs-foo-bar-2022-02-01-123456"));
+            assertThat(request.getDataStreamName(), equalTo("copy_logs-foo-bar"));
+        }
+
+        // Renaming with a suffix and irregular pattern backing indices
+        {
+            AutoFollowPattern pattern = new AutoFollowPattern(
+                "remote",
+                List.of("logs-*"),
+                List.of(),
+                "{{leader_index}}_copy",
+                Settings.EMPTY,
+                true,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+            );
+
+            Index index = new Index("my-backing-index", "uuid");
+            IndexAbstraction indexAbstraction = new IndexAbstraction.ConcreteIndex(
+                IndexMetadata.builder(index.getName())
+                    .settings(
+                        Settings.builder()
+                            .put(IndexMetadata.SETTING_NUMBER_OF_SHARDS, 1)
+                            .put(IndexMetadata.SETTING_NUMBER_OF_REPLICAS, 1)
+                            .put(IndexMetadata.SETTING_VERSION_CREATED, IndexVersion.current())
+                            .put(IndexMetadata.SETTING_INDEX_UUID, index.getUUID())
+                            .build()
+                    )
+                    .build(),
+                new DataStream("logs-foo-bar", List.of(index), 1, Map.of(), false, false, false, true, IndexMode.STANDARD)
+            );
+
+            PutFollowAction.Request request = AutoFollower.generateRequest("remote", index, indexAbstraction, pattern);
+            assertThat(request.getRemoteCluster(), equalTo("remote"));
+            assertThat(request.getFollowerIndex(), equalTo("my-backing-index_copy"));
+            assertThat(request.getLeaderIndex(), equalTo("my-backing-index"));
+            assertThat(request.getDataStreamName(), equalTo("logs-foo-bar_copy"));
+        }
+
+        // Renaming with a suffix but not part of a data stream
+        {
+            AutoFollowPattern pattern = new AutoFollowPattern(
+                "remote",
+                List.of("logs-*"),
+                List.of(),
+                "{{leader_index}}_copy",
+                Settings.EMPTY,
+                true,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+            );
+
+            Index index = new Index(".ds-logs-foo-bar-2022-02-01-123456", "uuid");
+            IndexAbstraction indexAbstraction = new IndexAbstraction.ConcreteIndex(
+                IndexMetadata.builder(index.getName())
+                    .settings(
+                        Settings.builder()
+                            .put(IndexMetadata.SETTING_NUMBER_OF_SHARDS, 1)
+                            .put(IndexMetadata.SETTING_NUMBER_OF_REPLICAS, 1)
+                            .put(IndexMetadata.SETTING_VERSION_CREATED, IndexVersion.current())
+                            .put(IndexMetadata.SETTING_INDEX_UUID, index.getUUID())
+                            .build()
+                    )
+                    .build(),
+                null
+            );
+
+            PutFollowAction.Request request = AutoFollower.generateRequest("remote", index, indexAbstraction, pattern);
+            assertThat(request.getRemoteCluster(), equalTo("remote"));
+            assertThat(request.getFollowerIndex(), equalTo(".ds-logs-foo-bar_copy-2022-02-01-123456"));
+            assertThat(request.getLeaderIndex(), equalTo(".ds-logs-foo-bar-2022-02-01-123456"));
+            assertThat(request.getDataStreamName(), equalTo(null));
+        }
+
+        // Regular backing index, but no renaming
+        {
+            AutoFollowPattern pattern = new AutoFollowPattern(
+                "remote",
+                List.of("logs-*"),
+                List.of(),
+                null,
+                Settings.EMPTY,
+                true,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+            );
+
+            Index index = new Index(".ds-logs-foo-bar-2022-02-01-123456", "uuid");
+            IndexAbstraction indexAbstraction = new IndexAbstraction.ConcreteIndex(
+                IndexMetadata.builder(index.getName())
+                    .settings(
+                        Settings.builder()
+                            .put(IndexMetadata.SETTING_NUMBER_OF_SHARDS, 1)
+                            .put(IndexMetadata.SETTING_NUMBER_OF_REPLICAS, 1)
+                            .put(IndexMetadata.SETTING_VERSION_CREATED, IndexVersion.current())
+                            .put(IndexMetadata.SETTING_INDEX_UUID, index.getUUID())
+                            .build()
+                    )
+                    .build(),
+                new DataStream("logs-foo-bar", List.of(index), 1, Map.of(), false, false, false, true, IndexMode.STANDARD)
+            );
+
+            PutFollowAction.Request request = AutoFollower.generateRequest("remote", index, indexAbstraction, pattern);
+            assertThat(request.getRemoteCluster(), equalTo("remote"));
+            assertThat(request.getFollowerIndex(), equalTo(".ds-logs-foo-bar-2022-02-01-123456"));
+            assertThat(request.getLeaderIndex(), equalTo(".ds-logs-foo-bar-2022-02-01-123456"));
+            assertThat(request.getDataStreamName(), equalTo(null));
+        }
+
+        // Renaming with a suffix and just the worst named backing indices
+        {
+            AutoFollowPattern pattern = new AutoFollowPattern(
+                "remote",
+                List.of("logs-*"),
+                List.of(),
+                "{{leader_index}}_copy",
+                Settings.EMPTY,
+                true,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+            );
+
+            Index index = new Index("my-.ds-backing-index", "uuid");
+            IndexAbstraction indexAbstraction = new IndexAbstraction.ConcreteIndex(
+                IndexMetadata.builder(index.getName())
+                    .settings(
+                        Settings.builder()
+                            .put(IndexMetadata.SETTING_NUMBER_OF_SHARDS, 1)
+                            .put(IndexMetadata.SETTING_NUMBER_OF_REPLICAS, 1)
+                            .put(IndexMetadata.SETTING_VERSION_CREATED, IndexVersion.current())
+                            .put(IndexMetadata.SETTING_INDEX_UUID, index.getUUID())
+                            .build()
+                    )
+                    .build(),
+                new DataStream("logs-foo-bar", List.of(index), 1, Map.of(), false, false, false, true, IndexMode.STANDARD)
+            );
+
+            IllegalArgumentException e = expectThrows(
+                IllegalArgumentException.class,
+                () -> AutoFollower.generateRequest("remote", index, indexAbstraction, pattern)
+            );
+            assertThat(
+                e.getMessage(),
+                containsString(
+                    "unable to determine follower index name from leader index name "
+                        + "[my-.ds-backing-index] and follow index pattern: [{{leader_index}}_copy]"
+                        + ", index appears to follow a regular data stream backing pattern, but could not be parsed"
+                )
+            );
+        }
     }
 
     public void testStats() {
@@ -1350,7 +1673,7 @@ public class AutoFollowCoordinatorTests extends ESTestCase {
 
     public void testWaitForMetadataVersion() {
         Client client = mock(Client.class);
-        when(client.getRemoteClusterClient(anyString())).thenReturn(client);
+        when(client.getRemoteClusterClient(anyString(), any())).thenReturn(client);
 
         AutoFollowPattern autoFollowPattern = createAutoFollowPattern("remote", "logs-*");
         Map<String, AutoFollowPattern> patterns = new HashMap<>();
@@ -1414,7 +1737,7 @@ public class AutoFollowCoordinatorTests extends ESTestCase {
 
     public void testWaitForTimeOut() {
         Client client = mock(Client.class);
-        when(client.getRemoteClusterClient(anyString())).thenReturn(client);
+        when(client.getRemoteClusterClient(anyString(), any())).thenReturn(client);
 
         AutoFollowPattern autoFollowPattern = createAutoFollowPattern("remote", "logs-*");
         Map<String, AutoFollowPattern> patterns = new HashMap<>();
@@ -1466,7 +1789,7 @@ public class AutoFollowCoordinatorTests extends ESTestCase {
 
     public void testAutoFollowerSoftDeletesDisabled() {
         Client client = mock(Client.class);
-        when(client.getRemoteClusterClient(anyString())).thenReturn(client);
+        when(client.getRemoteClusterClient(anyString(), any())).thenReturn(client);
 
         ClusterState remoteState = createRemoteClusterState("logs-20190101", false);
 
@@ -1532,7 +1855,7 @@ public class AutoFollowCoordinatorTests extends ESTestCase {
 
     public void testAutoFollowerFollowerIndexAlreadyExists() {
         Client client = mock(Client.class);
-        when(client.getRemoteClusterClient(anyString())).thenReturn(client);
+        when(client.getRemoteClusterClient(anyString(), any())).thenReturn(client);
 
         ClusterState remoteState = createRemoteClusterState("logs-20190101", true);
 
@@ -1550,7 +1873,7 @@ public class AutoFollowCoordinatorTests extends ESTestCase {
                 Metadata.builder()
                     .put(
                         IndexMetadata.builder("logs-20190101")
-                            .settings(settings(Version.CURRENT))
+                            .settings(settings(IndexVersion.current()))
                             .putCustom(
                                 Ccr.CCR_CUSTOM_METADATA_KEY,
                                 Map.of(
@@ -1699,7 +2022,7 @@ public class AutoFollowCoordinatorTests extends ESTestCase {
 
     public void testClosedIndicesAreNotAutoFollowed() {
         final Client client = mock(Client.class);
-        when(client.getRemoteClusterClient(anyString())).thenReturn(client);
+        when(client.getRemoteClusterClient(anyString(), any())).thenReturn(client);
 
         final String pattern = "pattern1";
         final ClusterState localState = ClusterState.builder(new ClusterName("local"))
@@ -1785,16 +2108,16 @@ public class AutoFollowCoordinatorTests extends ESTestCase {
         assertThat(results, notNullValue());
         assertThat(results.size(), equalTo(1));
 
-        for (ObjectObjectCursor<String, IndexMetadata> index : remoteState.metadata().indices()) {
-            boolean expect = index.value.getState() == IndexMetadata.State.OPEN;
-            assertThat(results.get(0).autoFollowExecutionResults.containsKey(index.value.getIndex()), is(expect));
-            assertThat(followedIndices.contains(index.key), is(expect));
+        for (var index : remoteState.metadata().indices().entrySet()) {
+            boolean expect = index.getValue().getState() == IndexMetadata.State.OPEN;
+            assertThat(results.get(0).autoFollowExecutionResults.containsKey(index.getValue().getIndex()), is(expect));
+            assertThat(followedIndices.contains(index.getKey()), is(expect));
         }
     }
 
     public void testExcludedPatternIndicesAreNotAutoFollowed() {
         final Client client = mock(Client.class);
-        when(client.getRemoteClusterClient(anyString())).thenReturn(client);
+        when(client.getRemoteClusterClient(anyString(), any())).thenReturn(client);
 
         final String pattern = "pattern1";
         final ClusterState localState = ClusterState.builder(new ClusterName("local"))
@@ -1892,11 +2215,11 @@ public class AutoFollowCoordinatorTests extends ESTestCase {
         final List<String> autoFollowedIndices = autoFollowMetadata.getFollowedLeaderIndexUUIDs().get(pattern);
         assertThat(autoFollowedIndices.size(), equalTo(nbLeaderIndices));
 
-        for (ObjectObjectCursor<String, IndexMetadata> index : remoteState.metadata().indices()) {
-            final Index remoteIndex = index.value.getIndex();
+        for (var index : remoteState.metadata().indices().entrySet()) {
+            final Index remoteIndex = index.getValue().getIndex();
             boolean followed = remoteIndex.getName().startsWith("docs-excluded") == false;
-            assertThat(results.get(0).autoFollowExecutionResults.containsKey(index.value.getIndex()), is(followed));
-            assertThat(followedIndices.contains(index.key), is(followed));
+            assertThat(results.get(0).autoFollowExecutionResults.containsKey(index.getValue().getIndex()), is(followed));
+            assertThat(followedIndices.contains(index.getKey()), is(followed));
             assertThat(autoFollowedIndices.contains(remoteIndex.getUUID()), equalTo(followed));
         }
     }
@@ -2095,7 +2418,7 @@ public class AutoFollowCoordinatorTests extends ESTestCase {
         ClusterState finalRemoteState
     ) {
         final Client client = mock(Client.class);
-        when(client.getRemoteClusterClient(anyString())).thenReturn(client);
+        when(client.getRemoteClusterClient(anyString(), any())).thenReturn(client);
 
         final String pattern = "pattern1";
         final ClusterState localState = ClusterState.builder(new ClusterName("local"))
@@ -2172,12 +2495,12 @@ public class AutoFollowCoordinatorTests extends ESTestCase {
     ) {
         Settings.Builder indexSettings;
         if (enableSoftDeletes == false) {
-            indexSettings = settings(VersionUtils.randomPreviousCompatibleVersion(random(), Version.V_8_0_0)).put(
+            indexSettings = settings(IndexVersionUtils.randomPreviousCompatibleVersion(random(), IndexVersions.V_8_0_0)).put(
                 IndexSettings.INDEX_SOFT_DELETES_SETTING.getKey(),
                 false
             );
         } else {
-            indexSettings = settings(Version.CURRENT);
+            indexSettings = settings(IndexVersion.current());
         }
         indexSettings.put(IndexMetadata.SETTING_INDEX_UUID, UUIDs.randomBase64UUID(random()));
 
@@ -2190,8 +2513,12 @@ public class AutoFollowCoordinatorTests extends ESTestCase {
         ClusterState.Builder csBuilder = ClusterState.builder(new ClusterName("remote"))
             .metadata(Metadata.builder().put(indexMetadata, true).version(metadataVersion));
 
-        ShardRouting shardRouting = TestShardRouting.newShardRouting(indexName, 0, "1", true, ShardRoutingState.INITIALIZING)
-            .moveToStarted();
+        ShardRouting shardRouting = TestShardRouting.newShardRouting(
+            new ShardId(indexMetadata.getIndex(), 0),
+            "1",
+            true,
+            ShardRoutingState.INITIALIZING
+        ).moveToStarted(ShardRouting.UNAVAILABLE_EXPECTED_SHARD_SIZE);
         IndexRoutingTable indexRoutingTable = IndexRoutingTable.builder(indexMetadata.getIndex()).addShard(shardRouting).build();
         return csBuilder.routingTable(RoutingTable.builder().add(indexRoutingTable).build()).build();
     }
@@ -2208,7 +2535,7 @@ public class AutoFollowCoordinatorTests extends ESTestCase {
         final RoutingTable.Builder routingTableBuilder = RoutingTable.builder(previous.routingTable());
         for (String indexName : indices) {
             IndexMetadata indexMetadata = IndexMetadata.builder(indexName)
-                .settings(settings(Version.CURRENT).put(IndexMetadata.SETTING_INDEX_UUID, UUIDs.randomBase64UUID(random())))
+                .settings(settings(IndexVersion.current()).put(IndexMetadata.SETTING_INDEX_UUID, UUIDs.randomBase64UUID(random())))
                 .numberOfShards(1)
                 .numberOfReplicas(0)
                 .system(systemIndices)
@@ -2216,7 +2543,14 @@ public class AutoFollowCoordinatorTests extends ESTestCase {
             metadataBuilder.put(indexMetadata, true);
             routingTableBuilder.add(
                 IndexRoutingTable.builder(indexMetadata.getIndex())
-                    .addShard(TestShardRouting.newShardRouting(indexName, 0, "1", true, ShardRoutingState.INITIALIZING).moveToStarted())
+                    .addShard(
+                        TestShardRouting.newShardRouting(
+                            new ShardId(indexMetadata.getIndex(), 0),
+                            "1",
+                            true,
+                            ShardRoutingState.INITIALIZING
+                        ).moveToStarted(ShardRouting.UNAVAILABLE_EXPECTED_SHARD_SIZE)
+                    )
                     .build()
             );
         }
@@ -2261,7 +2595,7 @@ public class AutoFollowCoordinatorTests extends ESTestCase {
     }
 
     private static ClusterState createRemoteClusterStateWithDataStream(String dataStreamName, boolean system) {
-        Settings.Builder indexSettings = settings(Version.CURRENT);
+        Settings.Builder indexSettings = settings(IndexVersion.current());
         indexSettings.put(IndexMetadata.SETTING_INDEX_UUID, UUIDs.randomBase64UUID(random()));
         indexSettings.put("index.hidden", true);
 
@@ -2273,20 +2607,24 @@ public class AutoFollowCoordinatorTests extends ESTestCase {
             .build();
         DataStream dataStream = new DataStream(
             dataStreamName,
-            new DataStream.TimestampField("@timestamp"),
             List.of(indexMetadata.getIndex()),
             1,
             null,
             false,
             false,
             system,
-            false
+            false,
+            null
         );
         ClusterState.Builder csBuilder = ClusterState.builder(new ClusterName("remote"))
             .metadata(Metadata.builder().put(indexMetadata, true).put(dataStream).version(0L));
 
-        ShardRouting shardRouting = TestShardRouting.newShardRouting(dataStreamName, 0, "1", true, ShardRoutingState.INITIALIZING)
-            .moveToStarted();
+        ShardRouting shardRouting = TestShardRouting.newShardRouting(
+            new ShardId(indexMetadata.getIndex(), 0),
+            "1",
+            true,
+            ShardRoutingState.INITIALIZING
+        ).moveToStarted(ShardRouting.UNAVAILABLE_EXPECTED_SHARD_SIZE);
         IndexRoutingTable indexRoutingTable = IndexRoutingTable.builder(indexMetadata.getIndex()).addShard(shardRouting).build();
         return csBuilder.routingTable(RoutingTable.builder().add(indexRoutingTable).build()).build();
     }

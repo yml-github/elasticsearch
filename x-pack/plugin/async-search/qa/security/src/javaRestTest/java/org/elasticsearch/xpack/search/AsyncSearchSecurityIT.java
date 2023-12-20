@@ -22,6 +22,9 @@ import org.elasticsearch.common.xcontent.LoggingDeprecationHandler;
 import org.elasticsearch.common.xcontent.XContentHelper;
 import org.elasticsearch.core.TimeValue;
 import org.elasticsearch.search.SearchHit;
+import org.elasticsearch.test.cluster.ElasticsearchCluster;
+import org.elasticsearch.test.cluster.local.distribution.DistributionType;
+import org.elasticsearch.test.cluster.util.resource.Resource;
 import org.elasticsearch.test.rest.ESRestTestCase;
 import org.elasticsearch.xcontent.NamedXContentRegistry;
 import org.elasticsearch.xcontent.XContentBuilder;
@@ -31,6 +34,7 @@ import org.elasticsearch.xpack.core.async.AsyncExecutionId;
 import org.hamcrest.CustomMatcher;
 import org.hamcrest.Matcher;
 import org.junit.Before;
+import org.junit.ClassRule;
 
 import java.io.IOException;
 import java.util.List;
@@ -46,6 +50,27 @@ import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.greaterThan;
 
 public class AsyncSearchSecurityIT extends ESRestTestCase {
+
+    @ClassRule
+    public static ElasticsearchCluster cluster = ElasticsearchCluster.local()
+        .distribution(DistributionType.DEFAULT)
+        .nodes(2)
+        .setting("xpack.license.self_generated.type", "trial")
+        .setting("xpack.security.enabled", "true")
+        .rolesFile(Resource.fromClasspath("roles.yml"))
+        .user("test_kibana_user", "x-pack-test-password", "kibana_system", false)
+        .user("test-admin", "x-pack-test-password", "test-admin", false)
+        .user("user1", "x-pack-test-password", "user1", false)
+        .user("user2", "x-pack-test-password", "user2", false)
+        .user("user-dls", "x-pack-test-password", "user-dls", false)
+        .user("user-cancel", "x-pack-test-password", "user-cancel", false)
+        .build();
+
+    @Override
+    protected String getTestRestCluster() {
+        return cluster.getHttpAddresses();
+    }
+
     /**
      * All tests run as a superuser but use <code>es-security-runas-user</code> to become a less privileged user.
      */
@@ -61,35 +86,35 @@ public class AsyncSearchSecurityIT extends ESRestTestCase {
         index("index", "0", "foo", "bar");
         index("index", "1", "bar", "baz");
         index("index", "2", "baz", "boo");
-        refresh("index");
+        refresh(adminClient(), "index");
 
         createIndex("index-user1", Settings.EMPTY);
         index("index-user1", "0", "foo", "bar");
-        refresh("index-user1");
+        refresh(adminClient(), "index-user1");
 
         createIndex("index-user2", Settings.EMPTY);
         index("index-user2", "0", "foo", "bar");
         index("index-user2", "1", "bar", "baz");
-        refresh("index-user2");
+        refresh(adminClient(), "index-user2");
     }
 
     public void testWithDlsAndFls() throws Exception {
         Response submitResp = submitAsyncSearch("*", "*", TimeValue.timeValueSeconds(10), "user-dls");
         assertOK(submitResp);
         SearchHit[] hits = getSearchHits(extractResponseId(submitResp), "user-dls");
-        assertThat(hits, arrayContainingInAnyOrder(new CustomMatcher<SearchHit>("\"index\" doc 1 matcher") {
+        assertThat(hits, arrayContainingInAnyOrder(new CustomMatcher<>("\"index\" doc 1 matcher") {
             @Override
             public boolean matches(Object actual) {
                 SearchHit hit = (SearchHit) actual;
                 return "index".equals(hit.getIndex()) && "1".equals(hit.getId()) && hit.getSourceAsMap().isEmpty();
             }
-        }, new CustomMatcher<SearchHit>("\"index\" doc 2 matcher") {
+        }, new CustomMatcher<>("\"index\" doc 2 matcher") {
             @Override
             public boolean matches(Object actual) {
                 SearchHit hit = (SearchHit) actual;
                 return "index".equals(hit.getIndex()) && "2".equals(hit.getId()) && "boo".equals(hit.getSourceAsMap().get("baz"));
             }
-        }, new CustomMatcher<SearchHit>("\"index-user2\" doc 1 matcher") {
+        }, new CustomMatcher<>("\"index-user2\" doc 1 matcher") {
             @Override
             public boolean matches(Object actual) {
                 SearchHit hit = (SearchHit) actual;
@@ -274,13 +299,13 @@ public class AsyncSearchSecurityIT extends ESRestTestCase {
             assertOK(dlsResp);
             assertThat(
                 getSearchHits(extractResponseId(dlsResp), "user-dls"),
-                arrayContainingInAnyOrder(new CustomMatcher<SearchHit>("\"index\" doc 1 matcher") {
+                arrayContainingInAnyOrder(new CustomMatcher<>("\"index\" doc 1 matcher") {
                     @Override
                     public boolean matches(Object actual) {
                         SearchHit hit = (SearchHit) actual;
                         return "index".equals(hit.getIndex()) && "1".equals(hit.getId()) && hit.getSourceAsMap().isEmpty();
                     }
-                }, new CustomMatcher<SearchHit>("\"index\" doc 2 matcher") {
+                }, new CustomMatcher<>("\"index\" doc 2 matcher") {
                     @Override
                     public boolean matches(Object actual) {
                         SearchHit hit = (SearchHit) actual;
@@ -294,7 +319,7 @@ public class AsyncSearchSecurityIT extends ESRestTestCase {
     }
 
     static String extractResponseId(Response response) throws IOException {
-        Map<String, Object> map = toMap(response);
+        var map = responseAsMap(response);
         return (String) map.get("id");
     }
 
@@ -313,10 +338,6 @@ public class AsyncSearchSecurityIT extends ESRestTestCase {
         final Request request = new Request("POST", "/" + index + "/_doc/" + id);
         request.setJsonEntity(Strings.toString(document));
         assertOK(client().performRequest(request));
-    }
-
-    static void refresh(String index) throws IOException {
-        assertOK(adminClient().performRequest(new Request("POST", "/" + index + "/_refresh")));
     }
 
     static Response get(String index, String id, String user) throws IOException {
@@ -348,14 +369,6 @@ public class AsyncSearchSecurityIT extends ESRestTestCase {
         return client().performRequest(request);
     }
 
-    static Map<String, Object> toMap(Response response) throws IOException {
-        return toMap(EntityUtils.toString(response.getEntity()));
-    }
-
-    static Map<String, Object> toMap(String response) {
-        return XContentHelper.convertToMap(JsonXContent.jsonXContent, response, false);
-    }
-
     static void setRunAsHeader(Request request, String user) {
         final RequestOptions.Builder builder = RequestOptions.DEFAULT.toBuilder();
         builder.addHeader(RUN_AS_USER_HEADER, user);
@@ -369,7 +382,7 @@ public class AsyncSearchSecurityIT extends ESRestTestCase {
         request.addParameter("keep_alive", between(1, 5) + "m");
         final Response response = client().performRequest(request);
         assertOK(response);
-        return (String) toMap(response).get("id");
+        return (String) responseAsMap(response).get("id");
     }
 
     static Response submitAsyncSearchWithPIT(String pit, String query, TimeValue waitForCompletion, String user) throws IOException {

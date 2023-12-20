@@ -12,6 +12,7 @@ import org.elasticsearch.common.Strings;
 import org.elasticsearch.common.io.stream.BytesStreamOutput;
 import org.elasticsearch.common.io.stream.NamedWriteableAwareStreamInput;
 import org.elasticsearch.common.io.stream.StreamInput;
+import org.elasticsearch.search.aggregations.bucket.histogram.HistogramAggregationBuilder;
 import org.elasticsearch.search.aggregations.support.ValuesSourceAggregationBuilder;
 import org.elasticsearch.test.AbstractBuilderTestCase;
 import org.elasticsearch.xcontent.ToXContent;
@@ -27,6 +28,7 @@ import java.util.List;
 import java.util.Set;
 
 import static org.elasticsearch.test.EqualsHashCodeTestUtils.checkEqualsAndHashCode;
+import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.hasSize;
 
 public abstract class BaseAggregationTestCase<AB extends AbstractAggregationBuilder<AB>> extends AbstractBuilderTestCase {
@@ -49,11 +51,22 @@ public abstract class BaseAggregationTestCase<AB extends AbstractAggregationBuil
         }
         factoriesBuilder.toXContent(builder, ToXContent.EMPTY_PARAMS);
         XContentBuilder shuffled = shuffleXContent(builder);
-        XContentParser parser = createParser(shuffled);
-        AggregationBuilder newAgg = parse(parser);
-        assertNotSame(newAgg, testAgg);
-        assertEquals(testAgg, newAgg);
-        assertEquals(testAgg.hashCode(), newAgg.hashCode());
+        try (XContentParser parser = createParser(shuffled)) {
+            AggregationBuilder newAgg = parse(parser);
+            assertNotSame(newAgg, testAgg);
+            assertEquals(testAgg, newAgg);
+            assertEquals(testAgg.hashCode(), newAgg.hashCode());
+        }
+    }
+
+    public void testSupportsConcurrentExecution() {
+        int cardinality = randomIntBetween(-1, 100);
+        AB builder = createTestAggregatorBuilder();
+        boolean supportsConcurrency = builder.supportsParallelCollection(field -> cardinality);
+        AggregationBuilder bucketBuilder = new HistogramAggregationBuilder("test");
+        assertTrue(bucketBuilder.supportsParallelCollection(field -> cardinality));
+        bucketBuilder.subAggregation(builder);
+        assertThat(bucketBuilder.supportsParallelCollection(field -> cardinality), equalTo(supportsConcurrency));
     }
 
     /**
@@ -73,10 +86,12 @@ public abstract class BaseAggregationTestCase<AB extends AbstractAggregationBuil
         }
         factoriesBuilder.toXContent(builder, ToXContent.EMPTY_PARAMS);
         XContentBuilder shuffled = shuffleXContent(builder);
-        XContentParser parser = createParser(shuffled);
 
-        assertSame(XContentParser.Token.START_OBJECT, parser.nextToken());
-        AggregatorFactories.Builder parsed = AggregatorFactories.parseAggregators(parser);
+        AggregatorFactories.Builder parsed;
+        try (XContentParser parser = createParser(shuffled)) {
+            assertSame(XContentParser.Token.START_OBJECT, parser.nextToken());
+            parsed = AggregatorFactories.parseAggregators(parser);
+        }
 
         assertThat(parsed.getAggregatorFactories(), hasSize(testAggs.size()));
         assertThat(parsed.getPipelineAggregatorFactories(), hasSize(0));
@@ -115,8 +130,10 @@ public abstract class BaseAggregationTestCase<AB extends AbstractAggregationBuil
     public void testToString() throws IOException {
         AB testAgg = createTestAggregatorBuilder();
         String toString = randomBoolean() ? Strings.toString(testAgg) : testAgg.toString();
-        XContentParser parser = createParser(XContentType.JSON.xContent(), toString);
-        AggregationBuilder newAgg = parse(parser);
+        AggregationBuilder newAgg;
+        try (XContentParser parser = createParser(XContentType.JSON.xContent(), toString)) {
+            newAgg = parse(parser);
+        }
         assertNotSame(newAgg, testAgg);
         assertEquals(testAgg, newAgg);
         assertEquals(testAgg.hashCode(), newAgg.hashCode());
@@ -187,32 +204,24 @@ public abstract class BaseAggregationTestCase<AB extends AbstractAggregationBuil
 
     public String randomNumericField() {
         int randomInt = randomInt(3);
-        switch (randomInt) {
-            case 0:
-                return DATE_FIELD_NAME;
-            case 1:
-                return DOUBLE_FIELD_NAME;
-            case 2:
-            default:
-                return INT_FIELD_NAME;
-        }
+        return switch (randomInt) {
+            case 0 -> DATE_FIELD_NAME;
+            case 1 -> DOUBLE_FIELD_NAME;
+            case 2 -> INT_FIELD_NAME;
+            default -> INT_FIELD_NAME;
+        };
     }
 
     protected void randomFieldOrScript(ValuesSourceAggregationBuilder<?> factory, String field) {
         int choice = randomInt(2);
         switch (choice) {
-            case 0:
-                factory.field(field);
-                break;
-            case 1:
+            case 0 -> factory.field(field);
+            case 1 -> {
                 factory.field(field);
                 factory.script(mockScript("_value + 1"));
-                break;
-            case 2:
-                factory.script(mockScript("doc[" + field + "] + 1"));
-                break;
-            default:
-                throw new AssertionError("Unknown random operation [" + choice + "]");
+            }
+            case 2 -> factory.script(mockScript("doc[" + field + "] + 1"));
+            default -> throw new AssertionError("Unknown random operation [" + choice + "]");
         }
     }
 

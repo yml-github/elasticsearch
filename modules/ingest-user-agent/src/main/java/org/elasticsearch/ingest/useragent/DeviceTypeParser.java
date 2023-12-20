@@ -9,10 +9,10 @@
 package org.elasticsearch.ingest.useragent;
 
 import org.elasticsearch.ElasticsearchParseException;
-import org.elasticsearch.common.xcontent.LoggingDeprecationHandler;
-import org.elasticsearch.xcontent.NamedXContentRegistry;
+import org.elasticsearch.ingest.useragent.UserAgentParser.VersionedName;
 import org.elasticsearch.xcontent.XContentFactory;
 import org.elasticsearch.xcontent.XContentParser;
+import org.elasticsearch.xcontent.XContentParserConfiguration;
 import org.elasticsearch.xcontent.XContentType;
 
 import java.io.IOException;
@@ -24,7 +24,6 @@ import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-import static org.elasticsearch.ingest.useragent.UserAgentParser.VersionedName;
 import static org.elasticsearch.ingest.useragent.UserAgentParser.readParserConfigurations;
 
 public class DeviceTypeParser {
@@ -40,24 +39,24 @@ public class DeviceTypeParser {
     private final HashMap<String, ArrayList<DeviceTypeSubPattern>> deviceTypePatterns = new HashMap<>();
 
     public void init(InputStream regexStream) throws IOException {
-        // EMPTY is safe here because we don't use namedObject
-        XContentParser yamlParser = XContentFactory.xContent(XContentType.YAML)
-            .createParser(NamedXContentRegistry.EMPTY, LoggingDeprecationHandler.INSTANCE, regexStream);
+        try (
+            XContentParser yamlParser = XContentFactory.xContent(XContentType.YAML)
+                .createParser(XContentParserConfiguration.EMPTY, regexStream)
+        ) {
+            XContentParser.Token token = yamlParser.nextToken();
+            if (token == XContentParser.Token.START_OBJECT) {
+                token = yamlParser.nextToken();
 
-        XContentParser.Token token = yamlParser.nextToken();
-
-        if (token == XContentParser.Token.START_OBJECT) {
-            token = yamlParser.nextToken();
-
-            for (; token != null; token = yamlParser.nextToken()) {
-                String currentName = yamlParser.currentName();
-                if (token == XContentParser.Token.FIELD_NAME && patternListKeys.contains(currentName)) {
-                    List<Map<String, String>> parserConfigurations = readParserConfigurations(yamlParser);
-                    ArrayList<DeviceTypeSubPattern> subPatterns = new ArrayList<>();
-                    for (Map<String, String> map : parserConfigurations) {
-                        subPatterns.add(new DeviceTypeSubPattern(Pattern.compile((map.get("regex"))), map.get("replacement")));
+                for (; token != null; token = yamlParser.nextToken()) {
+                    String currentName = yamlParser.currentName();
+                    if (token == XContentParser.Token.FIELD_NAME && patternListKeys.contains(currentName)) {
+                        List<Map<String, String>> parserConfigurations = readParserConfigurations(yamlParser);
+                        ArrayList<DeviceTypeSubPattern> subPatterns = new ArrayList<>();
+                        for (Map<String, String> map : parserConfigurations) {
+                            subPatterns.add(new DeviceTypeSubPattern(Pattern.compile((map.get("regex"))), map.get("replacement")));
+                        }
+                        deviceTypePatterns.put(currentName, subPatterns);
                     }
-                    deviceTypePatterns.put(currentName, subPatterns);
                 }
             }
         }
@@ -92,18 +91,18 @@ public class DeviceTypeParser {
             String deviceType = null;
             switch (patternKey) {
                 case OS_PARSERS:
-                    if (os != null && os.name != null) {
-                        deviceType = findMatch(deviceTypePatterns.get(patternKey), os.name);
+                    if (os != null && os.name() != null) {
+                        deviceType = findMatch(deviceTypePatterns.get(patternKey), os.name());
                     }
                     break;
                 case BROWSER_PARSER:
-                    if (userAgent != null && userAgent.name != null) {
-                        deviceType = findMatch(deviceTypePatterns.get(patternKey), userAgent.name);
+                    if (userAgent != null && userAgent.name() != null) {
+                        deviceType = findMatch(deviceTypePatterns.get(patternKey), userAgent.name());
                     }
                     break;
                 case DEVICE_PARSER:
-                    if (device != null && device.name != null) {
-                        deviceType = findMatch(deviceTypePatterns.get(patternKey), device.name);
+                    if (device != null && device.name() != null) {
+                        deviceType = findMatch(deviceTypePatterns.get(patternKey), device.name());
                     }
                     break;
                 default:
@@ -131,7 +130,7 @@ public class DeviceTypeParser {
         return "Other";
     }
 
-    private String findMatch(List<DeviceTypeSubPattern> possiblePatterns, String matchString) {
+    private static String findMatch(List<DeviceTypeSubPattern> possiblePatterns, String matchString) {
         String name;
         for (DeviceTypeSubPattern pattern : possiblePatterns) {
             name = pattern.match(matchString);

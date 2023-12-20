@@ -14,6 +14,7 @@ import org.apache.lucene.search.suggest.document.ContextSuggestField;
 import org.apache.lucene.util.CharsRef;
 import org.apache.lucene.util.CharsRefBuilder;
 import org.elasticsearch.ElasticsearchParseException;
+import org.elasticsearch.common.util.Maps;
 import org.elasticsearch.index.mapper.CompletionFieldMapper;
 import org.elasticsearch.index.mapper.LuceneDocument;
 import org.elasticsearch.index.mapper.MappingParser;
@@ -24,7 +25,6 @@ import org.elasticsearch.xcontent.XContentBuilder;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
@@ -53,7 +53,7 @@ public class ContextMappings implements ToXContent, Iterable<ContextMapping<?>> 
             throw new UnsupportedOperationException("Maximum of 10 context types are supported was: " + contextMappings.size());
         }
         this.contextMappings = contextMappings;
-        contextNameMap = new HashMap<>(contextMappings.size());
+        contextNameMap = Maps.newMapWithExpectedSize(contextMappings.size());
         for (ContextMapping<?> mapping : contextMappings) {
             contextNameMap.put(mapping.name(), mapping);
         }
@@ -142,7 +142,7 @@ public class ContextMappings implements ToXContent, Iterable<ContextMapping<?>> 
             if (typedContexts.isEmpty()) {
                 throw new IllegalArgumentException("Contexts are mandatory in context enabled completion field [" + name + "]");
             }
-            return new ArrayList<CharSequence>(typedContexts);
+            return new ArrayList<>(typedContexts);
         }
     }
 
@@ -166,8 +166,8 @@ public class ContextMappings implements ToXContent, Iterable<ContextMapping<?>> 
                 List<ContextMapping.InternalQueryContext> internalQueryContext = queryContexts.get(mapping.name());
                 if (internalQueryContext != null) {
                     for (ContextMapping.InternalQueryContext context : internalQueryContext) {
-                        scratch.append(context.context);
-                        typedContextQuery.addContext(scratch.toCharsRef(), context.boost, context.isPrefix == false);
+                        scratch.append(context.context());
+                        typedContextQuery.addContext(scratch.toCharsRef(), context.boost(), context.isPrefix() == false);
                         scratch.setLength(1);
                         hasContext = true;
                     }
@@ -188,17 +188,13 @@ public class ContextMappings implements ToXContent, Iterable<ContextMapping<?>> 
      *
      */
     public Map<String, Set<String>> getNamedContexts(List<CharSequence> contexts) {
-        Map<String, Set<String>> contextMap = new HashMap<>(contexts.size());
+        Map<String, Set<String>> contextMap = Maps.newMapWithExpectedSize(contexts.size());
         for (CharSequence typedContext : contexts) {
             int typeId = typedContext.charAt(0);
             assert typeId < contextMappings.size() : "Returned context has invalid type";
             ContextMapping<?> mapping = contextMappings.get(typeId);
-            Set<String> contextEntries = contextMap.get(mapping.name());
-            if (contextEntries == null) {
-                contextEntries = new HashSet<>();
-                contextMap.put(mapping.name(), contextEntries);
-            }
-            contextEntries.add(typedContext.subSequence(1, typedContext.length()).toString());
+            contextMap.computeIfAbsent(mapping.name(), k -> new HashSet<>())
+                .add(typedContext.subSequence(1, typedContext.length()).toString());
         }
         return contextMap;
     }
@@ -234,17 +230,10 @@ public class ContextMappings implements ToXContent, Iterable<ContextMapping<?>> 
     private static ContextMapping<?> load(Map<String, Object> contextConfig) {
         String name = extractRequiredValue(contextConfig, FIELD_NAME);
         String type = extractRequiredValue(contextConfig, FIELD_TYPE);
-        final ContextMapping<?> contextMapping;
-        switch (Type.fromString(type)) {
-            case CATEGORY:
-                contextMapping = CategoryContextMapping.load(name, contextConfig);
-                break;
-            case GEO:
-                contextMapping = GeoContextMapping.load(name, contextConfig);
-                break;
-            default:
-                throw new ElasticsearchParseException("unknown context type[" + type + "]");
-        }
+        final ContextMapping<?> contextMapping = switch (Type.fromString(type)) {
+            case CATEGORY -> CategoryContextMapping.load(name, contextConfig);
+            case GEO -> GeoContextMapping.load(name, contextConfig);
+        };
         MappingParser.checkNoRemainingFields(name, contextConfig);
         return contextMapping;
     }
@@ -280,7 +269,7 @@ public class ContextMappings implements ToXContent, Iterable<ContextMapping<?>> 
 
     @Override
     public boolean equals(Object obj) {
-        if (obj == null || (obj instanceof ContextMappings) == false) {
+        if ((obj instanceof ContextMappings) == false) {
             return false;
         }
         ContextMappings other = ((ContextMappings) obj);

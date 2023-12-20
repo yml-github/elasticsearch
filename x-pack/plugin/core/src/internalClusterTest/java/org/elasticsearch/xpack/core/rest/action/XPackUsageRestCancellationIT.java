@@ -8,7 +8,7 @@
 package org.elasticsearch.xpack.core.rest.action;
 
 import org.apache.http.client.methods.HttpGet;
-import org.elasticsearch.Version;
+import org.elasticsearch.TransportVersion;
 import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.action.ActionRequest;
 import org.elasticsearch.action.ActionResponse;
@@ -32,7 +32,7 @@ import org.elasticsearch.tasks.Task;
 import org.elasticsearch.test.ESIntegTestCase;
 import org.elasticsearch.threadpool.ThreadPool;
 import org.elasticsearch.transport.TransportService;
-import org.elasticsearch.transport.nio.NioTransportPlugin;
+import org.elasticsearch.transport.netty4.Netty4Plugin;
 import org.elasticsearch.xpack.core.LocalStateCompositeXPackPlugin;
 import org.elasticsearch.xpack.core.XPackFeatureSet;
 import org.elasticsearch.xpack.core.action.TransportXPackUsageAction;
@@ -62,14 +62,14 @@ public class XPackUsageRestCancellationIT extends ESIntegTestCase {
 
     @Override
     protected Collection<Class<? extends Plugin>> nodePlugins() {
-        return Arrays.asList(getTestTransportPlugin(), BlockingUsageActionXPackPlugin.class, NioTransportPlugin.class);
+        return Arrays.asList(getTestTransportPlugin(), BlockingUsageActionXPackPlugin.class);
     }
 
     @Override
     protected Settings nodeSettings(int ordinal, Settings otherSettings) {
         return Settings.builder()
             .put(super.nodeSettings(ordinal, otherSettings))
-            .put(NetworkModule.HTTP_DEFAULT_TYPE_SETTING.getKey(), NioTransportPlugin.NIO_HTTP_TRANSPORT_NAME)
+            .put(NetworkModule.HTTP_DEFAULT_TYPE_SETTING.getKey(), Netty4Plugin.NETTY_HTTP_TRANSPORT_NAME)
             .build();
     }
 
@@ -172,8 +172,8 @@ public class XPackUsageRestCancellationIT extends ESIntegTestCase {
             blockActionLatch.await();
             listener.onResponse(new XPackUsageFeatureResponse(new XPackFeatureSet.Usage("test", false, false) {
                 @Override
-                public Version getMinimalSupportedVersion() {
-                    return Version.CURRENT;
+                public TransportVersion getMinimalSupportedVersion() {
+                    return TransportVersion.current();
                 }
             }));
         }

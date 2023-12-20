@@ -11,13 +11,17 @@ import org.elasticsearch.action.support.ActionFilters;
 import org.elasticsearch.action.support.HandledTransportAction;
 import org.elasticsearch.client.internal.ParentTaskAssigningClient;
 import org.elasticsearch.client.internal.node.NodeClient;
+import org.elasticsearch.cluster.service.ClusterService;
 import org.elasticsearch.common.inject.Inject;
 import org.elasticsearch.common.settings.Settings;
+import org.elasticsearch.common.util.concurrent.EsExecutors;
 import org.elasticsearch.license.LicenseUtils;
 import org.elasticsearch.license.XPackLicenseState;
 import org.elasticsearch.tasks.Task;
+import org.elasticsearch.tasks.TaskId;
 import org.elasticsearch.threadpool.ThreadPool;
 import org.elasticsearch.transport.TransportService;
+import org.elasticsearch.xpack.core.ClientHelper;
 import org.elasticsearch.xpack.core.XPackField;
 import org.elasticsearch.xpack.core.XPackSettings;
 import org.elasticsearch.xpack.core.ml.MachineLearningField;
@@ -37,7 +41,6 @@ import java.util.Objects;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
-import static org.elasticsearch.xpack.core.ClientHelper.filterSecurityHeaders;
 import static org.elasticsearch.xpack.ml.utils.SecondaryAuthorizationUtils.useSecondaryAuthIfAvailable;
 
 /**
@@ -50,6 +53,7 @@ public class TransportPreviewDataFrameAnalyticsAction extends HandledTransportAc
     private final SecurityContext securityContext;
     private final ThreadPool threadPool;
     private final Settings settings;
+    private final ClusterService clusterService;
 
     @Inject
     public TransportPreviewDataFrameAnalyticsAction(
@@ -58,9 +62,10 @@ public class TransportPreviewDataFrameAnalyticsAction extends HandledTransportAc
         NodeClient client,
         XPackLicenseState licenseState,
         Settings settings,
-        ThreadPool threadPool
+        ThreadPool threadPool,
+        ClusterService clusterService
     ) {
-        super(PreviewDataFrameAnalyticsAction.NAME, transportService, actionFilters, Request::new);
+        super(PreviewDataFrameAnalyticsAction.NAME, transportService, actionFilters, Request::new, EsExecutors.DIRECT_EXECUTOR_SERVICE);
         this.client = Objects.requireNonNull(client);
         this.licenseState = licenseState;
         this.threadPool = threadPool;
@@ -68,6 +73,7 @@ public class TransportPreviewDataFrameAnalyticsAction extends HandledTransportAc
         this.securityContext = XPackSettings.SECURITY_ENABLED.get(settings)
             ? new SecurityContext(settings, threadPool.getThreadContext())
             : null;
+        this.clusterService = clusterService;
     }
 
     private static Map<String, Object> mergeRow(DataFrameDataExtractor.Row row, List<String> fieldNames) {
@@ -87,7 +93,7 @@ public class TransportPreviewDataFrameAnalyticsAction extends HandledTransportAc
                 // Set the auth headers (preferring the secondary headers) to the caller's.
                 // Regardless if the config was previously stored or not.
                 DataFrameAnalyticsConfig config = new DataFrameAnalyticsConfig.Builder(request.getConfig()).setHeaders(
-                    filterSecurityHeaders(threadPool.getThreadContext().getHeaders())
+                    ClientHelper.getPersistableSafeSecurityHeaders(threadPool.getThreadContext(), clusterService.state())
                 ).build();
                 preview(task, config, listener);
             });
@@ -97,13 +103,14 @@ public class TransportPreviewDataFrameAnalyticsAction extends HandledTransportAc
     }
 
     void preview(Task task, DataFrameAnalyticsConfig config, ActionListener<Response> listener) {
+        final TaskId parentTaskId = new TaskId(clusterService.localNode().getId(), task.getId());
         final ExtractedFieldsDetectorFactory extractedFieldsDetectorFactory = new ExtractedFieldsDetectorFactory(
-            new ParentTaskAssigningClient(client, task.getParentTaskId())
+            new ParentTaskAssigningClient(client, parentTaskId)
         );
         extractedFieldsDetectorFactory.createFromSource(config, ActionListener.wrap(extractedFieldsDetector -> {
             DataFrameDataExtractor extractor = DataFrameDataExtractorFactory.createForSourceIndices(
                 client,
-                task.getParentTaskId().toString(),
+                parentTaskId.toString(),
                 config,
                 extractedFieldsDetector.detect().v1()
             ).newExtractor(false);

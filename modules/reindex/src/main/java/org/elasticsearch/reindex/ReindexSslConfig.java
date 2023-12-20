@@ -28,17 +28,15 @@ import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.function.Function;
 
 import javax.net.ssl.HostnameVerifier;
 import javax.net.ssl.SSLContext;
 
-import static org.elasticsearch.common.settings.Setting.listSetting;
 import static org.elasticsearch.common.settings.Setting.simpleString;
+import static org.elasticsearch.common.settings.Setting.stringListSetting;
 
 /**
  * Loads "reindex.ssl.*" configuration from Settings, and makes the applicable configuration (trust manager / key manager / hostname
@@ -63,7 +61,7 @@ public class ReindexSslConfig {
         for (String key : SslConfigurationKeys.getListKeys()) {
             String settingName = "reindex.ssl." + key;
             final Setting.Property[] properties = SslConfigurationKeys.isDeprecated(key) ? deprecatedProperties : defaultProperties;
-            SETTINGS.put(settingName, listSetting(settingName, Collections.emptyList(), Function.identity(), properties));
+            SETTINGS.put(settingName, stringListSetting(settingName, properties));
         }
         for (String key : SslConfigurationKeys.getSecureStringKeys()) {
             String settingName = "reindex.ssl." + key;
@@ -147,10 +145,10 @@ public class ReindexSslConfig {
      * configurations if the underlying key/certificate files are modified.
      */
     SSLIOSessionStrategy getStrategy() {
-        final HostnameVerifier hostnameVerifier = configuration.getVerificationMode().isHostnameVerificationEnabled()
+        final HostnameVerifier hostnameVerifier = configuration.verificationMode().isHostnameVerificationEnabled()
             ? new DefaultHostnameVerifier()
             : new NoopHostnameVerifier();
-        final String[] protocols = configuration.getSupportedProtocols().toArray(Strings.EMPTY_ARRAY);
+        final String[] protocols = configuration.supportedProtocols().toArray(Strings.EMPTY_ARRAY);
         final String[] cipherSuites = configuration.getCipherSuites().toArray(Strings.EMPTY_ARRAY);
         return new SSLIOSessionStrategy(context, protocols, cipherSuites, hostnameVerifier);
     }

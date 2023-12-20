@@ -11,12 +11,13 @@ import org.apache.logging.log4j.Logger;
 import org.elasticsearch.ElasticsearchParseException;
 import org.elasticsearch.ResourceNotFoundException;
 import org.elasticsearch.action.ActionListener;
+import org.elasticsearch.action.DelegatingActionListener;
 import org.elasticsearch.action.DocWriteRequest;
-import org.elasticsearch.action.get.GetAction;
 import org.elasticsearch.action.get.GetRequest;
 import org.elasticsearch.action.get.GetResponse;
-import org.elasticsearch.action.index.IndexAction;
+import org.elasticsearch.action.get.TransportGetAction;
 import org.elasticsearch.action.index.IndexRequest;
+import org.elasticsearch.action.index.TransportIndexAction;
 import org.elasticsearch.action.search.SearchRequest;
 import org.elasticsearch.action.search.SearchResponse;
 import org.elasticsearch.action.support.IndicesOptions;
@@ -24,6 +25,7 @@ import org.elasticsearch.action.support.WriteRequest;
 import org.elasticsearch.action.support.master.AcknowledgedResponse;
 import org.elasticsearch.client.internal.Client;
 import org.elasticsearch.cluster.ClusterState;
+import org.elasticsearch.cluster.service.ClusterService;
 import org.elasticsearch.common.bytes.BytesReference;
 import org.elasticsearch.common.xcontent.LoggingDeprecationHandler;
 import org.elasticsearch.core.Nullable;
@@ -41,6 +43,7 @@ import org.elasticsearch.xcontent.XContentBuilder;
 import org.elasticsearch.xcontent.XContentFactory;
 import org.elasticsearch.xcontent.XContentParser;
 import org.elasticsearch.xcontent.XContentType;
+import org.elasticsearch.xpack.core.ClientHelper;
 import org.elasticsearch.xpack.core.action.util.PageParams;
 import org.elasticsearch.xpack.core.ml.MlConfigIndex;
 import org.elasticsearch.xpack.core.ml.MlTasks;
@@ -62,11 +65,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
-import java.util.stream.Collectors;
 
 import static org.elasticsearch.xpack.core.ClientHelper.ML_ORIGIN;
 import static org.elasticsearch.xpack.core.ClientHelper.executeAsyncWithOrigin;
-import static org.elasticsearch.xpack.core.ClientHelper.filterSecurityHeaders;
 
 public class DataFrameAnalyticsConfigProvider {
 
@@ -79,11 +80,18 @@ public class DataFrameAnalyticsConfigProvider {
     private final Client client;
     private final NamedXContentRegistry xContentRegistry;
     private final DataFrameAnalyticsAuditor auditor;
+    private final ClusterService clusterService;
 
-    public DataFrameAnalyticsConfigProvider(Client client, NamedXContentRegistry xContentRegistry, DataFrameAnalyticsAuditor auditor) {
+    public DataFrameAnalyticsConfigProvider(
+        Client client,
+        NamedXContentRegistry xContentRegistry,
+        DataFrameAnalyticsAuditor auditor,
+        ClusterService clusterService
+    ) {
         this.client = Objects.requireNonNull(client);
         this.xContentRegistry = xContentRegistry;
         this.auditor = Objects.requireNonNull(auditor);
+        this.clusterService = clusterService;
     }
 
     /**
@@ -113,7 +121,11 @@ public class DataFrameAnalyticsConfigProvider {
     }
 
     private DataFrameAnalyticsConfig prepareConfigForIndex(DataFrameAnalyticsConfig config, Map<String, String> headers) {
-        return headers.isEmpty() ? config : new DataFrameAnalyticsConfig.Builder(config).setHeaders(filterSecurityHeaders(headers)).build();
+        return headers.isEmpty()
+            ? config
+            : new DataFrameAnalyticsConfig.Builder(config).setHeaders(
+                ClientHelper.getPersistableSafeSecurityHeaders(headers, clusterService.state())
+            ).build();
     }
 
     private void exists(String jobId, ActionListener<Boolean> listener) {
@@ -127,7 +139,7 @@ public class DataFrameAnalyticsConfigProvider {
 
         GetRequest getRequest = new GetRequest(MlConfigIndex.indexName(), DataFrameAnalyticsConfig.documentId(jobId));
         getRequest.fetchSourceContext(FetchSourceContext.DO_NOT_FETCH_SOURCE);
-        executeAsyncWithOrigin(client, ML_ORIGIN, GetAction.INSTANCE, getRequest, getListener);
+        executeAsyncWithOrigin(client, ML_ORIGIN, TransportGetAction.TYPE, getRequest, getListener);
     }
 
     private void deleteLeftOverDocs(DataFrameAnalyticsConfig config, TimeValue timeout, ActionListener<AcknowledgedResponse> listener) {
@@ -154,7 +166,7 @@ public class DataFrameAnalyticsConfigProvider {
         String id = update.getId();
 
         GetRequest getRequest = new GetRequest(MlConfigIndex.indexName(), DataFrameAnalyticsConfig.documentId(id));
-        executeAsyncWithOrigin(client, ML_ORIGIN, GetAction.INSTANCE, getRequest, ActionListener.wrap(getResponse -> {
+        executeAsyncWithOrigin(client, ML_ORIGIN, TransportGetAction.TYPE, getRequest, ActionListener.wrap(getResponse -> {
 
             // Fail the update request if the config to be updated doesn't exist
             if (getResponse.isExists() == false) {
@@ -164,14 +176,12 @@ public class DataFrameAnalyticsConfigProvider {
 
             // Parse the original config
             DataFrameAnalyticsConfig originalConfig;
-            try {
-                try (
-                    InputStream stream = getResponse.getSourceAsBytesRef().streamInput();
-                    XContentParser parser = XContentFactory.xContent(XContentType.JSON)
-                        .createParser(xContentRegistry, LoggingDeprecationHandler.INSTANCE, stream)
-                ) {
-                    originalConfig = DataFrameAnalyticsConfig.LENIENT_PARSER.apply(parser, null).build();
-                }
+            try (
+                InputStream stream = getResponse.getSourceAsBytesRef().streamInput();
+                XContentParser parser = XContentFactory.xContent(XContentType.JSON)
+                    .createParser(xContentRegistry, LoggingDeprecationHandler.INSTANCE, stream)
+            ) {
+                originalConfig = DataFrameAnalyticsConfig.LENIENT_PARSER.apply(parser, null).build();
             } catch (IOException e) {
                 listener.onFailure(new ElasticsearchParseException("Failed to parse data frame analytics configuration [" + id + "]", e));
                 return;
@@ -183,7 +193,7 @@ public class DataFrameAnalyticsConfigProvider {
             // Merge the original config with the given update object
             DataFrameAnalyticsConfig.Builder updatedConfigBuilder = update.mergeWithConfig(originalConfig);
             if (headers.isEmpty() == false) {
-                updatedConfigBuilder.setHeaders(filterSecurityHeaders(headers));
+                updatedConfigBuilder.setHeaders(ClientHelper.getPersistableSafeSecurityHeaders(headers, clusterService.state()));
             }
             DataFrameAnalyticsConfig updatedConfig = updatedConfigBuilder.build();
 
@@ -243,7 +253,7 @@ public class DataFrameAnalyticsConfigProvider {
             executeAsyncWithOrigin(
                 client,
                 ML_ORIGIN,
-                IndexAction.INSTANCE,
+                TransportIndexAction.TYPE,
                 indexRequest,
                 ActionListener.wrap(indexResponse -> listener.onResponse(config), e -> {
                     if (ExceptionsHelper.unwrapCause(e) instanceof VersionConflictEngineException) {
@@ -314,7 +324,7 @@ public class DataFrameAnalyticsConfigProvider {
             client.threadPool().getThreadContext(),
             ML_ORIGIN,
             searchRequest,
-            new ActionListener.Delegating<SearchResponse, List<DataFrameAnalyticsConfig>>(listener) {
+            new DelegatingActionListener<SearchResponse, List<DataFrameAnalyticsConfig>>(listener) {
                 @Override
                 public void onResponse(SearchResponse searchResponse) {
                     SearchHit[] hits = searchResponse.getHits().getHits();
@@ -333,7 +343,7 @@ public class DataFrameAnalyticsConfigProvider {
                     }
 
                     Set<String> tasksWithoutConfigs = new HashSet<>(jobsWithTask);
-                    tasksWithoutConfigs.removeAll(configs.stream().map(DataFrameAnalyticsConfig::getId).collect(Collectors.toList()));
+                    configs.stream().map(DataFrameAnalyticsConfig::getId).toList().forEach(tasksWithoutConfigs::remove);
                     if (tasksWithoutConfigs.isEmpty() == false) {
                         logger.warn("Data frame analytics tasks {} have no configs", tasksWithoutConfigs);
                     }

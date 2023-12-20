@@ -27,13 +27,13 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-import java.util.stream.Collectors;
 
 import static org.elasticsearch.repositories.azure.AzureFixtureHelper.assertValidBlockId;
 
@@ -76,7 +76,7 @@ public class AzureHttpHandler implements HttpHandler {
                 final List<String> blockIds = Arrays.stream(blockList.split("<Latest>"))
                     .filter(line -> line.contains("</Latest>"))
                     .map(line -> line.substring(0, line.indexOf("</Latest>")))
-                    .collect(Collectors.toList());
+                    .toList();
 
                 final ByteArrayOutputStream blob = new ByteArrayOutputStream();
                 for (String blockId : blockIds) {
@@ -177,14 +177,14 @@ public class AzureHttpHandler implements HttpHandler {
                             continue;
                         }
                     }
-                    list.append("""
+                    list.append(String.format(Locale.ROOT, """
                         <Blob>
                            <Name>%s</Name>
                            <Properties>
                              <Content-Length>%s</Content-Length>
                              <BlobType>BlockBlob</BlobType>
                            </Properties>
-                        </Blob>""".formatted(blobPath, blob.getValue().length()));
+                        </Blob>""", blobPath, blob.getValue().length()));
                 }
                 if (blobPrefixes.isEmpty() == false) {
                     blobPrefixes.forEach(p -> list.append("<BlobPrefix><Name>").append(p).append("</Name></BlobPrefix>"));
@@ -229,12 +229,12 @@ public class AzureHttpHandler implements HttpHandler {
         if ("HEAD".equals(exchange.getRequestMethod())) {
             exchange.sendResponseHeaders(status.getStatus(), -1L);
         } else {
-            final byte[] response = ("""
+            final byte[] response = (String.format(Locale.ROOT, """
                 <?xml version="1.0" encoding="UTF-8"?>
                 <Error>
                     <Code>%s</Code>
                     <Message>%s</Message>
-                </Error>""".formatted(errorCode, status)).getBytes(StandardCharsets.UTF_8);
+                </Error>""", errorCode, status)).getBytes(StandardCharsets.UTF_8);
             exchange.sendResponseHeaders(status.getStatus(), response.length);
             exchange.getResponseBody().write(response);
         }
@@ -243,19 +243,15 @@ public class AzureHttpHandler implements HttpHandler {
     // See https://docs.microsoft.com/en-us/rest/api/storageservices/common-rest-api-error-codes
     private static String toAzureErrorCode(final RestStatus status) {
         assert status.getStatus() >= 400;
-        switch (status) {
-            case BAD_REQUEST:
-                return "InvalidMetadata";
-            case NOT_FOUND:
-                return "BlobNotFound";
-            case INTERNAL_SERVER_ERROR:
-                return "InternalError";
-            case SERVICE_UNAVAILABLE:
-                return "ServerBusy";
-            case CONFLICT:
-                return "BlobAlreadyExists";
-            default:
-                throw new IllegalArgumentException("Error code [" + status.getStatus() + "] is not mapped to an existing Azure code");
-        }
+        return switch (status) {
+            case BAD_REQUEST -> "InvalidMetadata";
+            case NOT_FOUND -> "BlobNotFound";
+            case INTERNAL_SERVER_ERROR -> "InternalError";
+            case SERVICE_UNAVAILABLE -> "ServerBusy";
+            case CONFLICT -> "BlobAlreadyExists";
+            default -> throw new IllegalArgumentException(
+                "Error code [" + status.getStatus() + "] is not mapped to an existing Azure code"
+            );
+        };
     }
 }

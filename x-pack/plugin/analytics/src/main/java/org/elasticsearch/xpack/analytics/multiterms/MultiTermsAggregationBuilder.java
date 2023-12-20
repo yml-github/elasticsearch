@@ -7,6 +7,8 @@
 
 package org.elasticsearch.xpack.analytics.multiterms;
 
+import org.elasticsearch.TransportVersion;
+import org.elasticsearch.TransportVersions;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
 import org.elasticsearch.common.xcontent.LoggingDeprecationHandler;
@@ -17,6 +19,7 @@ import org.elasticsearch.search.aggregations.AggregatorFactories;
 import org.elasticsearch.search.aggregations.AggregatorFactory;
 import org.elasticsearch.search.aggregations.BucketOrder;
 import org.elasticsearch.search.aggregations.InternalOrder;
+import org.elasticsearch.search.aggregations.bucket.terms.TermsAggregationBuilder;
 import org.elasticsearch.search.aggregations.bucket.terms.TermsAggregator;
 import org.elasticsearch.search.aggregations.support.AggregationContext;
 import org.elasticsearch.search.aggregations.support.CoreValuesSourceType;
@@ -34,6 +37,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.function.ToLongFunction;
 import java.util.stream.Collectors;
 
 public class MultiTermsAggregationBuilder extends AbstractAggregationBuilder<MultiTermsAggregationBuilder> {
@@ -46,12 +50,8 @@ public class MultiTermsAggregationBuilder extends AbstractAggregationBuilder<Mul
     public static final ParseField REQUIRED_SIZE_FIELD_NAME = new ParseField("size");
     public static final ParseField SHOW_TERM_DOC_COUNT_ERROR = new ParseField("show_term_doc_count_error");
 
-    static final TermsAggregator.BucketCountThresholds DEFAULT_BUCKET_COUNT_THRESHOLDS = new TermsAggregator.BucketCountThresholds(
-        1,
-        0,
-        10,
-        -1
-    );
+    static final TermsAggregator.ConstantBucketCountThresholds DEFAULT_BUCKET_COUNT_THRESHOLDS =
+        new TermsAggregator.ConstantBucketCountThresholds(1, 0, 10, -1);
 
     public static final ObjectParser<MultiTermsAggregationBuilder, String> PARSER = ObjectParser.fromBuilder(
         NAME,
@@ -63,7 +63,8 @@ public class MultiTermsAggregationBuilder extends AbstractAggregationBuilder<Mul
             true,
             true,
             false,
-            true
+            true,
+            false
         );
 
         PARSER.declareBoolean(MultiTermsAggregationBuilder::showTermDocCountError, MultiTermsAggregationBuilder.SHOW_TERM_DOC_COUNT_ERROR);
@@ -142,11 +143,30 @@ public class MultiTermsAggregationBuilder extends AbstractAggregationBuilder<Mul
 
     public MultiTermsAggregationBuilder(StreamInput in) throws IOException {
         super(in);
-        terms = in.readList(MultiValuesSourceFieldConfig::new);
+        terms = in.readCollectionAsList(MultiValuesSourceFieldConfig::new);
         order = InternalOrder.Streams.readOrder(in);
         collectMode = in.readOptionalWriteable(Aggregator.SubAggCollectionMode::readFromStream);
         bucketCountThresholds = new TermsAggregator.BucketCountThresholds(in);
         showTermDocCountError = in.readBoolean();
+    }
+
+    @Override
+    public boolean supportsSampling() {
+        return true;
+    }
+
+    @Override
+    public boolean supportsParallelCollection(ToLongFunction<String> fieldCardinalityResolver) {
+        for (MultiValuesSourceFieldConfig sourceFieldConfig : terms) {
+            if (sourceFieldConfig.getScript() != null) {
+                return false;
+            }
+            long cardinality = fieldCardinalityResolver.applyAsLong(sourceFieldConfig.getFieldName());
+            if (TermsAggregationBuilder.supportsParallelCollection(cardinality, order, bucketCountThresholds) == false) {
+                return false;
+            }
+        }
+        return super.supportsParallelCollection(fieldCardinalityResolver);
     }
 
     /**
@@ -188,7 +208,7 @@ public class MultiTermsAggregationBuilder extends AbstractAggregationBuilder<Mul
 
     @Override
     protected final void doWriteTo(StreamOutput out) throws IOException {
-        out.writeList(terms);
+        out.writeCollection(terms);
         order.writeTo(out);
         out.writeOptionalWriteable(collectMode);
         bucketCountThresholds.writeTo(out);
@@ -426,5 +446,10 @@ public class MultiTermsAggregationBuilder extends AbstractAggregationBuilder<Mul
             && Objects.equals(this.order, other.order)
             && Objects.equals(this.collectMode, other.collectMode)
             && Objects.equals(this.bucketCountThresholds, other.bucketCountThresholds);
+    }
+
+    @Override
+    public TransportVersion getMinimalSupportedVersion() {
+        return TransportVersions.V_7_12_0;
     }
 }

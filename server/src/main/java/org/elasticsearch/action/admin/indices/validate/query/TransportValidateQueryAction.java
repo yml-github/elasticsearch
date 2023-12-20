@@ -73,7 +73,7 @@ public class TransportValidateQueryAction extends TransportBroadcastAction<
             indexNameExpressionResolver,
             ValidateQueryRequest::new,
             ShardValidateQueryRequest::new,
-            ThreadPool.Names.SEARCH
+            transportService.getThreadPool().executor(ThreadPool.Names.SEARCH)
         );
         this.searchService = searchService;
     }
@@ -222,7 +222,7 @@ public class TransportValidateQueryAction extends TransportBroadcastAction<
         return new ShardValidateQueryResponse(request.shardId(), valid, explanation, error);
     }
 
-    private String explain(SearchContext context, boolean rewritten) {
+    private static String explain(SearchContext context, boolean rewritten) {
         Query query = rewritten ? context.rewrittenQuery() : context.query();
         if (rewritten && query instanceof MatchNoDocsQuery) {
             return context.parsedQuery().query().toString();

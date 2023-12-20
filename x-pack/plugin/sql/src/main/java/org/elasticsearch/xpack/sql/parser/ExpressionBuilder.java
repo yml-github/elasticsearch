@@ -13,6 +13,7 @@ import org.antlr.v4.runtime.tree.TerminalNode;
 import org.elasticsearch.common.Strings;
 import org.elasticsearch.core.Booleans;
 import org.elasticsearch.core.Tuple;
+import org.elasticsearch.xpack.ql.InvalidArgumentException;
 import org.elasticsearch.xpack.ql.QlIllegalArgumentException;
 import org.elasticsearch.xpack.ql.expression.Alias;
 import org.elasticsearch.xpack.ql.expression.Expression;
@@ -203,24 +204,16 @@ abstract class ExpressionBuilder extends IdentifierBuilder {
 
         Source source = source(ctx);
 
-        switch (op.getSymbol().getType()) {
-            case SqlBaseParser.EQ:
-                return new Equals(source, left, right, zoneId);
-            case SqlBaseParser.NULLEQ:
-                return new NullEquals(source, left, right, zoneId);
-            case SqlBaseParser.NEQ:
-                return new NotEquals(source, left, right, zoneId);
-            case SqlBaseParser.LT:
-                return new LessThan(source, left, right, zoneId);
-            case SqlBaseParser.LTE:
-                return new LessThanOrEqual(source, left, right, zoneId);
-            case SqlBaseParser.GT:
-                return new GreaterThan(source, left, right, zoneId);
-            case SqlBaseParser.GTE:
-                return new GreaterThanOrEqual(source, left, right, zoneId);
-            default:
-                throw new ParsingException(source, "Unknown operator {}", source.text());
-        }
+        return switch (op.getSymbol().getType()) {
+            case SqlBaseParser.EQ -> new Equals(source, left, right, zoneId);
+            case SqlBaseParser.NULLEQ -> new NullEquals(source, left, right, zoneId);
+            case SqlBaseParser.NEQ -> new NotEquals(source, left, right, zoneId);
+            case SqlBaseParser.LT -> new LessThan(source, left, right, zoneId);
+            case SqlBaseParser.LTE -> new LessThanOrEqual(source, left, right, zoneId);
+            case SqlBaseParser.GT -> new GreaterThan(source, left, right, zoneId);
+            case SqlBaseParser.GTE -> new GreaterThanOrEqual(source, left, right, zoneId);
+            default -> throw new ParsingException(source, "Unknown operator {}", source.text());
+        };
     }
 
     @Override
@@ -361,20 +354,14 @@ abstract class ExpressionBuilder extends IdentifierBuilder {
 
         Source source = source(ctx);
 
-        switch (ctx.operator.getType()) {
-            case SqlBaseParser.ASTERISK:
-                return new Mul(source, left, right);
-            case SqlBaseParser.SLASH:
-                return new Div(source, left, right);
-            case SqlBaseParser.PERCENT:
-                return new Mod(source, left, right);
-            case SqlBaseParser.PLUS:
-                return new Add(source, left, right);
-            case SqlBaseParser.MINUS:
-                return new Sub(source, left, right);
-            default:
-                throw new ParsingException(source, "Unknown arithmetic {}", source.text());
-        }
+        return switch (ctx.operator.getType()) {
+            case SqlBaseParser.ASTERISK -> new Mul(source, left, right);
+            case SqlBaseParser.SLASH -> new Div(source, left, right);
+            case SqlBaseParser.PERCENT -> new Mod(source, left, right);
+            case SqlBaseParser.PLUS -> new Add(source, left, right);
+            case SqlBaseParser.MINUS -> new Sub(source, left, right);
+            default -> throw new ParsingException(source, "Unknown arithmetic {}", source.text());
+        };
     }
 
     //
@@ -476,14 +463,15 @@ abstract class ExpressionBuilder extends IdentifierBuilder {
         Source source = source(ctx);
         String functionName = ctx.name.getText();
 
-        switch (ctx.name.getType()) {
-            case SqlBaseLexer.CURRENT_TIMESTAMP:
-            case SqlBaseLexer.CURRENT_DATE:
-            case SqlBaseLexer.CURRENT_TIME:
-                return new UnresolvedFunction(source, functionName, FunctionResolutionStrategy.DEFAULT, emptyList());
-            default:
-                throw new ParsingException(source, "Unknown function [{}]", functionName);
-        }
+        return switch (ctx.name.getType()) {
+            case SqlBaseLexer.CURRENT_TIMESTAMP, SqlBaseLexer.CURRENT_DATE, SqlBaseLexer.CURRENT_TIME -> new UnresolvedFunction(
+                source,
+                functionName,
+                FunctionResolutionStrategy.DEFAULT,
+                emptyList()
+            );
+            default -> throw new ParsingException(source, "Unknown function [{}]", functionName);
+        };
     }
 
     @Override
@@ -719,7 +707,7 @@ abstract class ExpressionBuilder extends IdentifierBuilder {
 
         try {
             return new Literal(tuple.v1(), Double.valueOf(StringUtils.parseDouble(tuple.v2())), DataTypes.DOUBLE);
-        } catch (QlIllegalArgumentException siae) {
+        } catch (InvalidArgumentException siae) {
             throw new ParsingException(tuple.v1(), siae.getMessage());
         }
     }
@@ -727,22 +715,12 @@ abstract class ExpressionBuilder extends IdentifierBuilder {
     @Override
     public Literal visitIntegerLiteral(IntegerLiteralContext ctx) {
         Tuple<Source, String> tuple = withMinus(ctx);
-
-        long value;
         try {
-            value = Long.valueOf(StringUtils.parseLong(tuple.v2()));
-        } catch (QlIllegalArgumentException siae) {
+            Number value = StringUtils.parseIntegral(tuple.v2());
+            return new Literal(tuple.v1(), value, DataTypes.fromJava(value));
+        } catch (InvalidArgumentException siae) {
             throw new ParsingException(tuple.v1(), siae.getMessage());
         }
-
-        Object val = Long.valueOf(value);
-        DataType type = DataTypes.LONG;
-        // try to downsize to int if possible (since that's the most common type)
-        if ((int) value == value) {
-            type = DataTypes.INTEGER;
-            val = Integer.valueOf((int) value);
-        }
-        return new Literal(tuple.v1(), val, type);
     }
 
     @Override

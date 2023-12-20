@@ -10,31 +10,39 @@ import org.apache.lucene.document.StoredField;
 import org.apache.lucene.document.XYDocValuesField;
 import org.apache.lucene.document.XYPointField;
 import org.apache.lucene.search.Query;
-import org.elasticsearch.common.CheckedBiFunction;
 import org.elasticsearch.common.Explicit;
 import org.elasticsearch.common.geo.GeometryFormatterFactory;
 import org.elasticsearch.common.geo.ShapeRelation;
 import org.elasticsearch.common.logging.DeprecationCategory;
 import org.elasticsearch.common.logging.DeprecationLogger;
+import org.elasticsearch.core.CheckedFunction;
 import org.elasticsearch.geometry.Geometry;
 import org.elasticsearch.geometry.Point;
+import org.elasticsearch.index.fielddata.FieldDataContext;
+import org.elasticsearch.index.fielddata.IndexFieldData;
 import org.elasticsearch.index.mapper.AbstractPointGeometryFieldMapper;
+import org.elasticsearch.index.mapper.BlockDocValuesReader;
+import org.elasticsearch.index.mapper.BlockLoader;
+import org.elasticsearch.index.mapper.BlockSourceReader;
 import org.elasticsearch.index.mapper.DocumentParserContext;
 import org.elasticsearch.index.mapper.FieldMapper;
 import org.elasticsearch.index.mapper.GeoShapeFieldMapper;
 import org.elasticsearch.index.mapper.MappedFieldType;
 import org.elasticsearch.index.mapper.MapperBuilderContext;
 import org.elasticsearch.index.query.SearchExecutionContext;
+import org.elasticsearch.xcontent.XContentBuilder;
 import org.elasticsearch.xcontent.XContentParser;
 import org.elasticsearch.xpack.spatial.common.CartesianPoint;
+import org.elasticsearch.xpack.spatial.index.fielddata.plain.CartesianPointIndexFieldData;
 import org.elasticsearch.xpack.spatial.index.query.ShapeQueryPointProcessor;
+import org.elasticsearch.xpack.spatial.script.field.CartesianPointDocValuesField;
+import org.elasticsearch.xpack.spatial.search.aggregations.support.CartesianPointValuesSourceType;
 
 import java.io.IOException;
-import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
-import java.util.function.Supplier;
 
 /**
  * Field Mapper for point type.
@@ -67,18 +75,18 @@ public class PointFieldMapper extends AbstractPointGeometryFieldMapper<Cartesian
             this.nullValue = nullValueParam(
                 m -> builder(m).nullValue.get(),
                 (n, c, o) -> o == null ? null : parseNullValue(o, ignoreZValue.get().value(), ignoreMalformed.get().value()),
-                () -> null
+                () -> null,
+                XContentBuilder::field
             ).acceptsNull();
         }
 
         @Override
-        protected List<Parameter<?>> getParameters() {
-            return Arrays.asList(indexed, hasDocValues, stored, ignoreMalformed, ignoreZValue, nullValue, meta);
+        protected Parameter<?>[] getParameters() {
+            return new Parameter<?>[] { indexed, hasDocValues, stored, ignoreMalformed, ignoreZValue, nullValue, meta };
         }
 
         private static CartesianPoint parseNullValue(Object nullValue, boolean ignoreZValue, boolean ignoreMalformed) {
-            CartesianPoint point = new CartesianPoint();
-            CartesianPoint.parsePoint(nullValue, point, ignoreZValue);
+            CartesianPoint point = CartesianPoint.parsePoint(nullValue, ignoreZValue);
             if (ignoreMalformed == false) {
                 if (Double.isFinite(point.getX()) == false) {
                     throw new IllegalArgumentException("illegal x value [" + point.getX() + "]");
@@ -99,19 +107,23 @@ public class PointFieldMapper extends AbstractPointGeometryFieldMapper<Cartesian
                     "Adding multifields to [point] mappers has no effect and will be forbidden in future"
                 );
             }
-            CartesianPointParser parser = new CartesianPointParser(name, CartesianPoint::new, (p, point) -> {
-                CartesianPoint.parsePoint(p, point, ignoreZValue.get().value());
-                return point;
-            }, nullValue.get(), ignoreZValue.get().value(), ignoreMalformed.get().value());
+            CartesianPointParser parser = new CartesianPointParser(
+                name,
+                p -> CartesianPoint.parsePoint(p, ignoreZValue.get().value()),
+                nullValue.get(),
+                ignoreZValue.get().value(),
+                ignoreMalformed.get().value()
+            );
             PointFieldType ft = new PointFieldType(
                 context.buildFullName(name),
                 indexed.get(),
                 stored.get(),
                 hasDocValues.get(),
                 parser,
+                nullValue.get(),
                 meta.get()
             );
-            return new PointFieldMapper(name, ft, multiFieldsBuilder.build(this, context), copyTo.build(), parser, this);
+            return new PointFieldMapper(name, ft, multiFieldsBuilder.build(this, context), copyTo, parser, this);
         }
 
     }
@@ -142,13 +154,13 @@ public class PointFieldMapper extends AbstractPointGeometryFieldMapper<Cartesian
     }
 
     @Override
-    protected void index(DocumentParserContext context, CartesianPoint point) throws IOException {
-        if (fieldType().isSearchable()) {
+    protected void index(DocumentParserContext context, CartesianPoint point) {
+        if (fieldType().isIndexed()) {
             context.doc().add(new XYPointField(fieldType().name(), (float) point.getX(), (float) point.getY()));
         }
         if (fieldType().hasDocValues()) {
             context.doc().add(new XYDocValuesField(fieldType().name(), (float) point.getX(), (float) point.getY()));
-        } else if (fieldType().isStored() || fieldType().isSearchable()) {
+        } else if (fieldType().isStored() || fieldType().isIndexed()) {
             context.addToFieldNames(fieldType().name());
         }
         if (fieldType().isStored()) {
@@ -174,6 +186,7 @@ public class PointFieldMapper extends AbstractPointGeometryFieldMapper<Cartesian
     public static class PointFieldType extends AbstractGeometryFieldType<CartesianPoint> implements ShapeQueryable {
 
         private final ShapeQueryPointProcessor queryProcessor;
+        private final CartesianPoint nullValue;
 
         private PointFieldType(
             String name,
@@ -181,10 +194,27 @@ public class PointFieldMapper extends AbstractPointGeometryFieldMapper<Cartesian
             boolean stored,
             boolean hasDocValues,
             CartesianPointParser parser,
+            CartesianPoint nullValue,
             Map<String, String> meta
         ) {
             super(name, indexed, stored, hasDocValues, parser, meta);
+            this.nullValue = nullValue;
             this.queryProcessor = new ShapeQueryPointProcessor();
+        }
+
+        // only used in test
+        public PointFieldType(String name) {
+            this(name, true, false, true, null, null, Collections.emptyMap());
+        }
+
+        @Override
+        public IndexFieldData.Builder fielddataBuilder(FieldDataContext fieldDataContext) {
+            failIfNoDocValues();
+            return new CartesianPointIndexFieldData.Builder(
+                name(),
+                CartesianPointValuesSourceType.instance(),
+                CartesianPointDocValuesField::new
+            );
         }
 
         @Override
@@ -201,6 +231,17 @@ public class PointFieldMapper extends AbstractPointGeometryFieldMapper<Cartesian
         protected Function<List<CartesianPoint>, List<Object>> getFormatter(String format) {
             return GeometryFormatterFactory.getFormatter(format, p -> new Point(p.getX(), p.getY()));
         }
+
+        @Override
+        public BlockLoader blockLoader(BlockLoaderContext blContext) {
+            if (hasDocValues()) {
+                return new BlockDocValuesReader.LongsBlockLoader(name());
+            }
+            // TODO: Currently we use longs in the compute engine and render to WKT in ESQL
+            return new BlockSourceReader.LongsBlockLoader(
+                valueFetcher(blContext.sourcePaths(name()), nullValue, GeometryFormatterFactory.WKT)
+            );
+        }
     }
 
     /** CartesianPoint parser implementation */
@@ -208,13 +249,12 @@ public class PointFieldMapper extends AbstractPointGeometryFieldMapper<Cartesian
 
         CartesianPointParser(
             String field,
-            Supplier<CartesianPoint> pointSupplier,
-            CheckedBiFunction<XContentParser, CartesianPoint, CartesianPoint, IOException> objectParser,
+            CheckedFunction<XContentParser, CartesianPoint, IOException> objectParser,
             CartesianPoint nullValue,
             boolean ignoreZValue,
             boolean ignoreMalformed
         ) {
-            super(field, pointSupplier, objectParser, nullValue, ignoreZValue, ignoreMalformed);
+            super(field, objectParser, nullValue, ignoreZValue, ignoreMalformed, true);
         }
 
         @Override
@@ -231,8 +271,8 @@ public class PointFieldMapper extends AbstractPointGeometryFieldMapper<Cartesian
         }
 
         @Override
-        protected void reset(CartesianPoint in, double x, double y) {
-            in.reset(x, y);
+        protected CartesianPoint createPoint(double x, double y) {
+            return new CartesianPoint(x, y);
         }
 
         @Override

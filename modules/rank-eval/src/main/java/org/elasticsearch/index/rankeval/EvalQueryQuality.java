@@ -43,7 +43,7 @@ public class EvalQueryQuality implements ToXContentFragment, Writeable {
     public EvalQueryQuality(StreamInput in) throws IOException {
         this.queryId = in.readString();
         this.metricScore = in.readDouble();
-        this.ratedHits = in.readList(RatedSearchHit::new);
+        this.ratedHits = in.readCollectionAsList(RatedSearchHit::new);
         this.optionalMetricDetails = in.readOptionalNamedWriteable(MetricDetail.class);
     }
 
@@ -59,7 +59,7 @@ public class EvalQueryQuality implements ToXContentFragment, Writeable {
     public void writeTo(StreamOutput out) throws IOException {
         out.writeString(queryId);
         out.writeDouble(metricScore);
-        out.writeList(ratedHits);
+        out.writeCollection(ratedHits);
         out.writeOptionalNamedWriteable(this.optionalMetricDetails);
     }
 
@@ -94,8 +94,8 @@ public class EvalQueryQuality implements ToXContentFragment, Writeable {
         builder.startArray(UNRATED_DOCS_FIELD.getPreferredName());
         for (DocumentKey key : EvaluationMetric.filterUnratedDocuments(ratedHits)) {
             builder.startObject();
-            builder.field(RatedDocument.INDEX_FIELD.getPreferredName(), key.getIndex());
-            builder.field(RatedDocument.DOC_ID_FIELD.getPreferredName(), key.getDocId());
+            builder.field(RatedDocument.INDEX_FIELD.getPreferredName(), key.index());
+            builder.field(RatedDocument.DOC_ID_FIELD.getPreferredName(), key.docId());
             builder.endObject();
         }
         builder.endArray();

@@ -6,6 +6,7 @@
  */
 package org.elasticsearch.xpack.core.enrich;
 
+import org.elasticsearch.TransportVersions;
 import org.elasticsearch.Version;
 import org.elasticsearch.common.ParsingException;
 import org.elasticsearch.common.Strings;
@@ -13,9 +14,10 @@ import org.elasticsearch.common.bytes.BytesReference;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
 import org.elasticsearch.common.io.stream.Writeable;
+import org.elasticsearch.common.logging.DeprecationCategory;
+import org.elasticsearch.common.logging.DeprecationLogger;
 import org.elasticsearch.common.xcontent.XContentHelper;
 import org.elasticsearch.xcontent.ConstructingObjectParser;
-import org.elasticsearch.xcontent.ObjectParser.ValueType;
 import org.elasticsearch.xcontent.ParseField;
 import org.elasticsearch.xcontent.ToXContentFragment;
 import org.elasticsearch.xcontent.XContentBuilder;
@@ -32,6 +34,11 @@ import java.util.Objects;
  * Represents an enrich policy including its configuration.
  */
 public final class EnrichPolicy implements Writeable, ToXContentFragment {
+
+    private static final String ELASTICEARCH_VERSION_DEPRECATION_MESSAGE =
+        "the [elasticsearch_version] field of an enrich policy has no effect and will be removed in Elasticsearch 9.0";
+
+    private static final DeprecationLogger deprecationLogger = DeprecationLogger.getLogger(EnrichPolicy.class);
 
     public static final String ENRICH_INDEX_NAME_BASE = ".enrich-";
     public static final String ENRICH_INDEX_PATTERN = ENRICH_INDEX_NAME_BASE + "*";
@@ -57,7 +64,7 @@ public final class EnrichPolicy implements Writeable, ToXContentFragment {
             (List<String>) args[1],
             (String) args[2],
             (List<String>) args[3],
-            (Version) args[4]
+            (String) args[4]
         )
     );
 
@@ -74,12 +81,7 @@ public final class EnrichPolicy implements Writeable, ToXContentFragment {
         parser.declareStringArray(ConstructingObjectParser.constructorArg(), INDICES);
         parser.declareString(ConstructingObjectParser.constructorArg(), MATCH_FIELD);
         parser.declareStringArray(ConstructingObjectParser.constructorArg(), ENRICH_FIELDS);
-        parser.declareField(
-            ConstructingObjectParser.optionalConstructorArg(),
-            ((p, c) -> Version.fromString(p.text())),
-            ELASTICSEARCH_VERSION,
-            ValueType.STRING
-        );
+        parser.declareString(ConstructingObjectParser.optionalConstructorArg(), ELASTICSEARCH_VERSION);
     }
 
     public static EnrichPolicy fromXContent(XContentParser parser) throws IOException {
@@ -108,37 +110,45 @@ public final class EnrichPolicy implements Writeable, ToXContentFragment {
     private final List<String> indices;
     private final String matchField;
     private final List<String> enrichFields;
-    private final Version elasticsearchVersion;
 
     public EnrichPolicy(StreamInput in) throws IOException {
-        this(
-            in.readString(),
-            in.readOptionalWriteable(QuerySource::new),
-            in.readStringList(),
-            in.readString(),
-            in.readStringList(),
-            Version.readVersion(in)
-        );
+        this.type = in.readString();
+        this.query = in.readOptionalWriteable(QuerySource::new);
+        this.indices = in.readStringCollectionAsList();
+        this.matchField = in.readString();
+        this.enrichFields = in.readStringCollectionAsList();
+        if (in.getTransportVersion().before(TransportVersions.ENRICH_ELASTICSEARCH_VERSION_REMOVED)) {
+            // consume the passed-in meaningless version that old elasticsearch clusters will send
+            Version.readVersion(in);
+        }
     }
 
     public EnrichPolicy(String type, QuerySource query, List<String> indices, String matchField, List<String> enrichFields) {
-        this(type, query, indices, matchField, enrichFields, Version.CURRENT);
-    }
-
-    public EnrichPolicy(
-        String type,
-        QuerySource query,
-        List<String> indices,
-        String matchField,
-        List<String> enrichFields,
-        Version elasticsearchVersion
-    ) {
         this.type = type;
         this.query = query;
         this.indices = indices;
         this.matchField = matchField;
         this.enrichFields = enrichFields;
-        this.elasticsearchVersion = elasticsearchVersion != null ? elasticsearchVersion : Version.CURRENT;
+    }
+
+    private EnrichPolicy(
+        String type,
+        QuerySource query,
+        List<String> indices,
+        String matchField,
+        List<String> enrichFields,
+        String elasticsearchVersion
+    ) {
+        this(type, query, indices, matchField, enrichFields);
+        // for backwards compatibility reasons, it is possible to pass in an elasticsearchVersion -- that version is
+        // completely ignored and does nothing. we'll fix that in a future version, so send a deprecation warning.
+        if (elasticsearchVersion != null) {
+            deprecationLogger.warn(
+                DeprecationCategory.OTHER,
+                "enrich_policy_with_elasticsearch_version",
+                ELASTICEARCH_VERSION_DEPRECATION_MESSAGE
+            );
+        }
     }
 
     public String getType() {
@@ -161,12 +171,34 @@ public final class EnrichPolicy implements Writeable, ToXContentFragment {
         return enrichFields;
     }
 
-    public Version getElasticsearchVersion() {
-        return elasticsearchVersion;
-    }
-
     public static String getBaseName(String policyName) {
         return ENRICH_INDEX_NAME_BASE + policyName;
+    }
+
+    /**
+     * Given a policy name and a timestamp, return the enrich index name that should be used.
+     *
+     * @param policyName the name of the policy
+     * @param nowTimestamp the current time
+     * @return an enrich index name
+     */
+    public static String getIndexName(String policyName, long nowTimestamp) {
+        Objects.nonNull(policyName);
+        return EnrichPolicy.getBaseName(policyName) + "-" + nowTimestamp;
+    }
+
+    /**
+     * Tests whether the named policy is associated with the named index according to the naming
+     * pattern that exists between policy names and index names.
+     *
+     * @param policyName the policy name
+     * @param indexName the index name
+     * @return true if and only if the named policy is associated with the named index
+     */
+    public static boolean isPolicyForIndex(String policyName, String indexName) {
+        Objects.nonNull(policyName);
+        Objects.nonNull(indexName);
+        return indexName.matches(EnrichPolicy.getBaseName(policyName) + "-" + "\\d+");
     }
 
     @Override
@@ -176,7 +208,10 @@ public final class EnrichPolicy implements Writeable, ToXContentFragment {
         out.writeStringCollection(indices);
         out.writeString(matchField);
         out.writeStringCollection(enrichFields);
-        Version.writeVersion(elasticsearchVersion, out);
+        if (out.getTransportVersion().before(TransportVersions.ENRICH_ELASTICSEARCH_VERSION_REMOVED)) {
+            // emit the current version of elasticsearch for bwc serialization reasons
+            Version.writeVersion(Version.CURRENT, out);
+        }
     }
 
     @Override
@@ -196,9 +231,6 @@ public final class EnrichPolicy implements Writeable, ToXContentFragment {
         builder.array(INDICES.getPreferredName(), indices.toArray(new String[0]));
         builder.field(MATCH_FIELD.getPreferredName(), matchField);
         builder.array(ENRICH_FIELDS.getPreferredName(), enrichFields.toArray(new String[0]));
-        if (params.paramAsBoolean("include_version", false) && elasticsearchVersion != null) {
-            builder.field(ELASTICSEARCH_VERSION.getPreferredName(), elasticsearchVersion.toString());
-        }
     }
 
     @Override
@@ -210,13 +242,12 @@ public final class EnrichPolicy implements Writeable, ToXContentFragment {
             && Objects.equals(query, policy.query)
             && indices.equals(policy.indices)
             && matchField.equals(policy.matchField)
-            && enrichFields.equals(policy.enrichFields)
-            && elasticsearchVersion.equals(policy.elasticsearchVersion);
+            && enrichFields.equals(policy.enrichFields);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(type, query, indices, matchField, enrichFields, elasticsearchVersion);
+        return Objects.hash(type, query, indices, matchField, enrichFields);
     }
 
     public String toString() {
@@ -284,7 +315,7 @@ public final class EnrichPolicy implements Writeable, ToXContentFragment {
                     (List<String>) args[2],
                     (String) args[3],
                     (List<String>) args[4],
-                    (Version) args[5]
+                    (String) args[5]
                 )
             )
         );

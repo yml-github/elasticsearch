@@ -8,20 +8,35 @@
 
 package org.elasticsearch.script.mustache;
 
+import com.github.mustachejava.Binding;
+import com.github.mustachejava.Code;
+import com.github.mustachejava.ObjectHandler;
+import com.github.mustachejava.TemplateContext;
+import com.github.mustachejava.codes.ValueCode;
+import com.github.mustachejava.reflect.GuardedBinding;
+import com.github.mustachejava.reflect.MissingWrapper;
 import com.github.mustachejava.reflect.ReflectionObjectHandler;
+import com.github.mustachejava.util.Wrapper;
 
 import org.elasticsearch.common.util.CollectionUtils;
+import org.elasticsearch.common.util.Maps;
 import org.elasticsearch.common.util.iterable.Iterables;
 
+import java.lang.reflect.AccessibleObject;
 import java.lang.reflect.Array;
 import java.util.AbstractMap;
 import java.util.Collection;
-import java.util.HashMap;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
 final class CustomReflectionObjectHandler extends ReflectionObjectHandler {
+    private final boolean detectMissingParams;
+
+    CustomReflectionObjectHandler(boolean detectMissingParams) {
+        this.detectMissingParams = detectMissingParams;
+    }
 
     @Override
     public Object coerce(Object object) {
@@ -40,6 +55,46 @@ final class CustomReflectionObjectHandler extends ReflectionObjectHandler {
         }
     }
 
+    @Override
+    public Binding createBinding(String name, TemplateContext tc, Code code) {
+        return detectMissingParams ? new DetectMissingParamsGuardedBinding(this, name, tc, code) : super.createBinding(name, tc, code);
+    }
+
+    @Override
+    @SuppressWarnings("rawtypes")
+    protected AccessibleObject findMember(Class sClass, String name) {
+        /*
+         * overriding findMember from BaseObjectHandler (our superclass's superclass) to always return null.
+         *
+         * if you trace findMember there, you'll see that it always either returns null or invokes the getMethod
+         * or getField methods of that class. the last thing that getMethod and getField do is call 'setAccessible'
+         * but we don't have java.lang.reflect.ReflectPermission/suppressAccessChecks so that will always throw an
+         * exception.
+         *
+         * that is, with the permissions we're running with, it would always return null ('not found!') or throw
+         * an exception ('found, but you cannot do this!') -- so by overriding to null we're effectively saying
+         * "you will never find success going down this path, so don't bother trying"
+         */
+        return null;
+    }
+
+    static class DetectMissingParamsGuardedBinding extends GuardedBinding {
+        private final Code code;
+
+        DetectMissingParamsGuardedBinding(ObjectHandler oh, String name, TemplateContext tc, Code code) {
+            super(oh, name, tc, code);
+            this.code = code;
+        }
+
+        protected synchronized Wrapper getWrapper(String name, List<Object> scopes) {
+            Wrapper wrapper = super.getWrapper(name, scopes);
+            if (wrapper instanceof MissingWrapper && code instanceof ValueCode) {
+                throw new MustacheInvalidParameterException("Parameter [" + name + "] is missing");
+            }
+            return wrapper;
+        }
+    }
+
     static final class ArrayMap extends AbstractMap<Object, Object> implements Iterable<Object> {
 
         private final Object array;
@@ -54,8 +109,8 @@ final class CustomReflectionObjectHandler extends ReflectionObjectHandler {
         public Object get(Object key) {
             if ("size".equals(key)) {
                 return size();
-            } else if (key instanceof Number) {
-                return Array.get(array, ((Number) key).intValue());
+            } else if (key instanceof Number number) {
+                return Array.get(array, number.intValue());
             }
             try {
                 int index = Integer.parseInt(key.toString());
@@ -73,7 +128,7 @@ final class CustomReflectionObjectHandler extends ReflectionObjectHandler {
 
         @Override
         public Set<Entry<Object, Object>> entrySet() {
-            Map<Object, Object> map = new HashMap<>(length);
+            Map<Object, Object> map = Maps.newMapWithExpectedSize(length);
             for (int i = 0; i < length; i++) {
                 map.put(i, Array.get(array, i));
             }
@@ -112,8 +167,8 @@ final class CustomReflectionObjectHandler extends ReflectionObjectHandler {
         public Object get(Object key) {
             if ("size".equals(key)) {
                 return col.size();
-            } else if (key instanceof Number) {
-                return Iterables.get(col, ((Number) key).intValue());
+            } else if (key instanceof Number number) {
+                return Iterables.get(col, number.intValue());
             }
             try {
                 int index = Integer.parseInt(key.toString());
@@ -131,7 +186,7 @@ final class CustomReflectionObjectHandler extends ReflectionObjectHandler {
 
         @Override
         public Set<Entry<Object, Object>> entrySet() {
-            Map<Object, Object> map = new HashMap<>(col.size());
+            Map<Object, Object> map = Maps.newMapWithExpectedSize(col.size());
             int i = 0;
             for (Object item : col) {
                 map.put(i++, item);

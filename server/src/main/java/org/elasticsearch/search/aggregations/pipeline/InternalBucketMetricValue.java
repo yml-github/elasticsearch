@@ -31,10 +31,9 @@ public class InternalBucketMetricValue extends InternalNumericMetricsAggregation
     private String[] keys;
 
     public InternalBucketMetricValue(String name, String[] keys, double value, DocValueFormat formatter, Map<String, Object> metadata) {
-        super(name, metadata);
+        super(name, formatter, metadata);
         this.keys = keys;
         this.value = value;
-        this.format = formatter;
     }
 
     /**
@@ -42,7 +41,6 @@ public class InternalBucketMetricValue extends InternalNumericMetricsAggregation
      */
     public InternalBucketMetricValue(StreamInput in) throws IOException {
         super(in);
-        format = in.readNamedWriteable(DocValueFormat.class);
         value = in.readDouble();
         keys = in.readStringArray();
     }
@@ -98,11 +96,7 @@ public class InternalBucketMetricValue extends InternalNumericMetricsAggregation
         if (hasValue && format != DocValueFormat.RAW) {
             builder.field(CommonFields.VALUE_AS_STRING.getPreferredName(), format.format(value).toString());
         }
-        builder.startArray(KEYS_FIELD.getPreferredName());
-        for (String key : keys) {
-            builder.value(key);
-        }
-        builder.endArray();
+        builder.array(KEYS_FIELD.getPreferredName(), keys);
         return builder;
     }
 

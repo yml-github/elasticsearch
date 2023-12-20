@@ -102,8 +102,8 @@ public class Cache<K, V> {
         this.entriesExpireAfterAccess = true;
     }
 
-    // pkg-private for testing
-    long getExpireAfterAccessNanos() {
+    // public for testing
+    public long getExpireAfterAccessNanos() {
         return this.expireAfterAccessNanos;
     }
 
@@ -521,12 +521,12 @@ public class Cache<K, V> {
         Entry<K, V> h;
 
         boolean[] haveSegmentLock = new boolean[NUMBER_OF_SEGMENTS];
-        try {
-            for (int i = 0; i < NUMBER_OF_SEGMENTS; i++) {
-                segments[i].segmentLock.writeLock().lock();
-                haveSegmentLock[i] = true;
-            }
-            try (ReleasableLock ignored = lruLock.acquire()) {
+        try (ReleasableLock ignored = lruLock.acquire()) {
+            try {
+                for (int i = 0; i < NUMBER_OF_SEGMENTS; i++) {
+                    segments[i].segmentLock.writeLock().lock();
+                    haveSegmentLock[i] = true;
+                }
                 h = head;
                 for (CacheSegment segment : segments) {
                     segment.map = null;
@@ -539,11 +539,11 @@ public class Cache<K, V> {
                 head = tail = null;
                 count = 0;
                 weight = 0;
-            }
-        } finally {
-            for (int i = NUMBER_OF_SEGMENTS - 1; i >= 0; i--) {
-                if (haveSegmentLock[i]) {
-                    segments[i].segmentLock.writeLock().unlock();
+            } finally {
+                for (int i = NUMBER_OF_SEGMENTS - 1; i >= 0; i--) {
+                    if (haveSegmentLock[i]) {
+                        segments[i].segmentLock.writeLock().unlock();
+                    }
                 }
             }
         }
@@ -738,15 +738,9 @@ public class Cache<K, V> {
         boolean promoted = true;
         try (ReleasableLock ignored = lruLock.acquire()) {
             switch (entry.state) {
-                case DELETED:
-                    promoted = false;
-                    break;
-                case EXISTING:
-                    relinkAtHead(entry);
-                    break;
-                case NEW:
-                    linkAtHead(entry);
-                    break;
+                case DELETED -> promoted = false;
+                case EXISTING -> relinkAtHead(entry);
+                case NEW -> linkAtHead(entry);
             }
             if (promoted) {
                 evict(now);

@@ -16,7 +16,9 @@ import org.apache.lucene.search.PhraseQuery;
 import org.apache.lucene.search.PointRangeQuery;
 import org.apache.lucene.search.Query;
 import org.apache.lucene.search.TermQuery;
+import org.apache.lucene.util.BytesRef;
 import org.elasticsearch.common.ParsingException;
+import org.elasticsearch.core.Strings;
 import org.elasticsearch.test.AbstractQueryTestCase;
 
 import java.io.IOException;
@@ -76,12 +78,12 @@ public class MatchPhraseQueryBuilderTests extends AbstractQueryTestCase<MatchPhr
             randomAlphaOfLengthBetween(1, 10),
             randomAlphaOfLengthBetween(1, 10)
         );
-        String contentString = """
+        String contentString = Strings.format("""
             {
                 "match_phrase" : {
                     "%s" : "%s"
                 }
-            }""".formatted(matchPhraseQuery.fieldName(), matchPhraseQuery.value());
+            }""", matchPhraseQuery.fieldName(), matchPhraseQuery.value());
         alternateVersions.put(contentString, matchPhraseQuery);
         return alternateVersions;
     }
@@ -133,10 +135,7 @@ public class MatchPhraseQueryBuilderTests extends AbstractQueryTestCase<MatchPhr
             {
               "match_phrase" : {
                 "message" : {
-                  "query" : "this is a test",
-                  "slop" : 0,
-                  "zero_terms_query" : "NONE",
-                  "boost" : 1.0
+                  "query" : "this is a test"
                 }
               }
             }""";
@@ -152,7 +151,7 @@ public class MatchPhraseQueryBuilderTests extends AbstractQueryTestCase<MatchPhr
                   "query" : "this is a test",
                   "slop" : 2,
                   "zero_terms_query" : "ALL",
-                  "boost" : 1.0
+                  "boost" : 2.0
                 }
               }
             }""";
@@ -189,5 +188,44 @@ public class MatchPhraseQueryBuilderTests extends AbstractQueryTestCase<MatchPhr
             }""";
         e = expectThrows(ParsingException.class, () -> parseQuery(shortJson));
         assertEquals("[match_phrase] query doesn't support multiple fields, found [message1] and [message2]", e.getMessage());
+    }
+
+    public void testRewriteToTermQueries() throws IOException {
+        QueryBuilder queryBuilder = new MatchPhraseQueryBuilder(KEYWORD_FIELD_NAME, "value");
+        for (QueryRewriteContext context : new QueryRewriteContext[] { createSearchExecutionContext(), createQueryRewriteContext() }) {
+            QueryBuilder rewritten = queryBuilder.rewrite(context);
+            assertThat(rewritten, instanceOf(TermQueryBuilder.class));
+            TermQueryBuilder tqb = (TermQueryBuilder) rewritten;
+            assertEquals(KEYWORD_FIELD_NAME, tqb.fieldName);
+            assertEquals(new BytesRef("value"), tqb.value);
+        }
+    }
+
+    public void testRewriteToTermQueryWithAnalyzer() throws IOException {
+        MatchPhraseQueryBuilder queryBuilder = new MatchPhraseQueryBuilder(TEXT_FIELD_NAME, "value");
+        queryBuilder.analyzer("keyword");
+        for (QueryRewriteContext context : new QueryRewriteContext[] { createSearchExecutionContext(), createQueryRewriteContext() }) {
+            QueryBuilder rewritten = queryBuilder.rewrite(context);
+            assertThat(rewritten, instanceOf(TermQueryBuilder.class));
+            TermQueryBuilder tqb = (TermQueryBuilder) rewritten;
+            assertEquals(TEXT_FIELD_NAME, tqb.fieldName);
+            assertEquals(new BytesRef("value"), tqb.value);
+        }
+    }
+
+    public void testRewriteIndexQueryToMatchNone() throws IOException {
+        QueryBuilder query = new MatchPhraseQueryBuilder("_index", "does_not_exist");
+        for (QueryRewriteContext context : new QueryRewriteContext[] { createSearchExecutionContext(), createQueryRewriteContext() }) {
+            QueryBuilder rewritten = query.rewrite(context);
+            assertThat(rewritten, instanceOf(MatchNoneQueryBuilder.class));
+        }
+    }
+
+    public void testRewriteIndexQueryToNotMatchNone() throws IOException {
+        QueryBuilder query = new MatchPhraseQueryBuilder("_index", getIndex().getName());
+        for (QueryRewriteContext context : new QueryRewriteContext[] { createSearchExecutionContext(), createQueryRewriteContext() }) {
+            QueryBuilder rewritten = query.rewrite(context);
+            assertThat(rewritten, instanceOf(MatchAllQueryBuilder.class));
+        }
     }
 }

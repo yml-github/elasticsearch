@@ -9,12 +9,11 @@ package org.elasticsearch.xpack.ml.dataframe.steps;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-import org.apache.logging.log4j.message.ParameterizedMessage;
 import org.elasticsearch.ResourceNotFoundException;
 import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.action.admin.indices.refresh.RefreshResponse;
-import org.elasticsearch.action.search.SearchAction;
 import org.elasticsearch.action.search.SearchRequest;
+import org.elasticsearch.action.search.TransportSearchAction;
 import org.elasticsearch.client.internal.node.NodeClient;
 import org.elasticsearch.core.TimeValue;
 import org.elasticsearch.index.query.QueryBuilders;
@@ -34,6 +33,7 @@ import org.elasticsearch.xpack.ml.utils.MlIndicesUtils;
 
 import java.util.Objects;
 
+import static org.elasticsearch.core.Strings.format;
 import static org.elasticsearch.xpack.core.ClientHelper.ML_ORIGIN;
 import static org.elasticsearch.xpack.core.ClientHelper.executeAsyncWithOrigin;
 
@@ -65,12 +65,7 @@ public class InferenceStep extends AbstractDataFrameAnalyticsStep {
     @Override
     protected void doExecute(ActionListener<StepResponse> listener) {
         if (config.getAnalysis().supportsInference() == false) {
-            LOGGER.debug(
-                () -> new ParameterizedMessage(
-                    "[{}] Inference step completed immediately as analysis does not support inference",
-                    config.getId()
-                )
-            );
+            LOGGER.debug(() -> format("[%s] Inference step completed immediately as analysis does not support inference", config.getId()));
             listener.onResponse(new StepResponse(false));
             return;
         }
@@ -83,9 +78,7 @@ public class InferenceStep extends AbstractDataFrameAnalyticsStep {
             } else {
                 // no need to run inference at all so let us skip
                 // loading the model in memory.
-                LOGGER.debug(
-                    () -> new ParameterizedMessage("[{}] Inference step completed immediately as there are no test docs", config.getId())
-                );
+                LOGGER.debug(() -> "[" + config.getId() + "] Inference step completed immediately as there are no test docs");
                 task.getStatsHolder().getProgressTracker().updateInferenceProgress(100);
                 listener.onResponse(new StepResponse(isTaskStopping()));
                 return;
@@ -129,7 +122,7 @@ public class InferenceStep extends AbstractDataFrameAnalyticsStep {
         executeAsyncWithOrigin(
             client,
             ML_ORIGIN,
-            SearchAction.INSTANCE,
+            TransportSearchAction.TYPE,
             searchRequest,
             ActionListener.wrap(
                 searchResponse -> listener.onResponse(searchResponse.getHits().getTotalHits().value > 0),
@@ -149,7 +142,7 @@ public class InferenceStep extends AbstractDataFrameAnalyticsStep {
         SearchRequest searchRequest = new SearchRequest(InferenceIndexConstants.INDEX_PATTERN);
         searchRequest.source(searchSourceBuilder);
 
-        executeAsyncWithOrigin(client, ML_ORIGIN, SearchAction.INSTANCE, searchRequest, ActionListener.wrap(searchResponse -> {
+        executeAsyncWithOrigin(client, ML_ORIGIN, TransportSearchAction.TYPE, searchRequest, ActionListener.wrap(searchResponse -> {
             SearchHit[] hits = searchResponse.getHits().getHits();
             if (hits.length == 0) {
                 listener.onFailure(new ResourceNotFoundException("No model could be found to perform inference"));

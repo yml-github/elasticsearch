@@ -8,17 +8,17 @@
 
 package org.elasticsearch.plugins.cli;
 
-import org.apache.lucene.util.LuceneTestCase;
+import org.apache.lucene.tests.util.LuceneTestCase;
 import org.elasticsearch.Version;
 import org.elasticsearch.cli.ExitCodes;
 import org.elasticsearch.cli.MockTerminal;
+import org.elasticsearch.cli.ProcessInfo;
 import org.elasticsearch.cli.UserException;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.env.Environment;
 import org.elasticsearch.env.TestEnvironment;
 import org.elasticsearch.plugins.PluginTestUtil;
 import org.elasticsearch.test.ESTestCase;
-import org.elasticsearch.test.VersionUtils;
 import org.junit.Before;
 
 import java.io.BufferedReader;
@@ -28,6 +28,7 @@ import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 
 import static java.util.Collections.emptyList;
@@ -35,6 +36,7 @@ import static org.hamcrest.CoreMatchers.containsString;
 import static org.hamcrest.CoreMatchers.not;
 import static org.hamcrest.CoreMatchers.nullValue;
 import static org.hamcrest.Matchers.equalTo;
+import static org.hamcrest.Matchers.is;
 
 @LuceneTestCase.SuppressFileSystems("*")
 public class RemovePluginActionTests extends ESTestCase {
@@ -86,10 +88,10 @@ public class RemovePluginActionTests extends ESTestCase {
 
     static MockTerminal removePlugin(List<String> pluginIds, Path home, boolean purge) throws Exception {
         Environment env = TestEnvironment.newEnvironment(Settings.builder().put("path.home", home).build());
-        MockTerminal terminal = new MockTerminal();
-        final List<PluginDescriptor> plugins = pluginIds == null
+        MockTerminal terminal = MockTerminal.create();
+        final List<InstallablePlugin> plugins = pluginIds == null
             ? null
-            : pluginIds.stream().map(PluginDescriptor::new).collect(Collectors.toList());
+            : pluginIds.stream().map(InstallablePlugin::new).collect(Collectors.toList());
         new RemovePluginAction(terminal, env, purge).execute(plugins);
         return terminal;
     }
@@ -135,19 +137,6 @@ public class RemovePluginActionTests extends ESTestCase {
         removePlugin("other", home, randomBoolean());
         assertFalse(Files.exists(env.pluginsFile().resolve("fake")));
         assertFalse(Files.exists(env.pluginsFile().resolve("other")));
-        assertRemoveCleaned(env);
-    }
-
-    public void testRemoveOldVersion() throws Exception {
-        Version previous = VersionUtils.getPreviousVersion();
-        if (previous.before(Version.CURRENT.minimumIndexCompatibilityVersion())) {
-            // Can happen when bumping majors: 8.0 is only compat back to 7.0, but that's not released yet
-            // In this case, ignore what's released and just find that latest version before current
-            previous = VersionUtils.allVersions().stream().filter(v -> v.before(Version.CURRENT)).max(Version::compareTo).get();
-        }
-        createPlugin("fake", VersionUtils.randomVersionBetween(random(), Version.CURRENT.minimumIndexCompatibilityVersion(), previous));
-        removePlugin("fake", home, randomBoolean());
-        assertThat(Files.exists(env.pluginsFile().resolve("fake")), equalTo(false));
         assertRemoveCleaned(env);
     }
 
@@ -231,24 +220,18 @@ public class RemovePluginActionTests extends ESTestCase {
     public void testRemoveUninstalledPluginErrors() throws Exception {
         UserException e = expectThrows(UserException.class, () -> removePlugin("fake", home, randomBoolean()));
         assertEquals(ExitCodes.CONFIG, e.exitCode);
-        assertEquals("plugin [fake] not found; run 'elasticsearch-plugin list' to get list of installed plugins", e.getMessage());
+        assertThat(e.getMessage(), containsString("plugin [fake] not found"));
 
-        MockTerminal terminal = new MockTerminal();
+        MockTerminal terminal = MockTerminal.create();
 
         new MockRemovePluginCommand(env) {
-            protected boolean addShutdownHook() {
-                return false;
-            }
-        }.main(new String[] { "-Epath.home=" + home, "fake" }, terminal);
+        }.main(new String[] { "-Epath.home=" + home, "fake" }, terminal, new ProcessInfo(Map.of(), Map.of(), createTempDir()));
         try (
             BufferedReader reader = new BufferedReader(new StringReader(terminal.getOutput()));
             BufferedReader errorReader = new BufferedReader(new StringReader(terminal.getErrorOutput()))
         ) {
             assertThat(errorReader.readLine(), equalTo(""));
-            assertThat(
-                errorReader.readLine(),
-                equalTo("ERROR: plugin [fake] not found; run 'elasticsearch-plugin list' to get list of installed plugins")
-            );
+            assertThat(errorReader.readLine(), containsString("plugin [fake] not found"));
             assertThat(reader.readLine(), nullValue());
             assertThat(errorReader.readLine(), nullValue());
         }
@@ -269,6 +252,47 @@ public class RemovePluginActionTests extends ESTestCase {
         Files.createFile(env.pluginsFile().resolve("fake").resolve("plugin.jar"));
         Files.createFile(env.pluginsFile().resolve(".removing-fake"));
         removePlugin("fake", home, randomBoolean());
+    }
+
+    /**
+     * Check that if a plugin exists that has since been migrated to a module, then it is still possible
+     * to remove that plugin.
+     */
+    public void testRemoveMigratedPluginsWhenInstalled() throws Exception {
+        for (String id : List.of("repository-azure", "repository-gcs", "repository-s3")) {
+            createPlugin(id);
+            Files.createFile(env.pluginsFile().resolve(id).resolve("plugin.jar"));
+            final MockTerminal terminal = removePlugin(id, home, randomBoolean());
+
+            assertThat(Files.exists(env.pluginsFile().resolve(id)), is(false));
+            // This message shouldn't be printed if plugin was actually installed.
+            assertThat(terminal.getErrorOutput(), not(containsString("plugin [" + id + "] is no longer a plugin")));
+        }
+    }
+
+    /**
+     * Check that if we attempt to remove a plugin that has been migrated to a module, and that plugin is
+     * not actually installed, then we print an appropriate message and exit with a success code.
+     */
+    public void testRemoveMigratedPluginsWhenNotInstalled() throws Exception {
+        for (String id : List.of("repository-azure", "repository-gcs", "repository-s3")) {
+            final MockTerminal terminal = removePlugin(id, home, randomBoolean());
+            assertThat(terminal.getErrorOutput(), containsString("plugin [" + id + "] is no longer a plugin"));
+        }
+    }
+
+    /**
+     * Check that when removing (1) a regular, installed plugin and (2) an uninstalled plugin that has been migrated
+     * to a module, then the overall removal succeeds, and a message is printed about the migrated pluging.
+     */
+    public void testRemoveRegularInstalledPluginAndMigratedUninstalledPlugin() throws Exception {
+        createPlugin("fake");
+        Files.createFile(env.pluginsFile().resolve("fake").resolve("plugin.jar"));
+
+        final MockTerminal terminal = removePlugin(List.of("fake", "repository-s3"), home, randomBoolean());
+
+        assertThat(Files.exists(env.pluginsFile().resolve("fake")), is(false));
+        assertThat(terminal.getErrorOutput(), containsString("plugin [repository-s3] is no longer a plugin"));
     }
 
     private String expectedConfigDirPreservedMessage(final Path configDir) {

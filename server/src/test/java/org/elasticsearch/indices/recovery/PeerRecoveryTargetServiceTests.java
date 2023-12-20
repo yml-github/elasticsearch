@@ -14,13 +14,13 @@ import org.apache.lucene.store.Directory;
 import org.apache.lucene.store.IOContext;
 import org.apache.lucene.store.IndexInput;
 import org.apache.lucene.store.OutputStreamIndexOutput;
-import org.elasticsearch.Version;
-import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.action.admin.indices.flush.FlushRequest;
 import org.elasticsearch.action.index.IndexRequest;
+import org.elasticsearch.action.support.ActionTestUtils;
 import org.elasticsearch.action.support.PlainActionFuture;
 import org.elasticsearch.cluster.metadata.IndexMetadata;
 import org.elasticsearch.cluster.node.DiscoveryNode;
+import org.elasticsearch.cluster.node.DiscoveryNodeUtils;
 import org.elasticsearch.cluster.routing.RecoverySource;
 import org.elasticsearch.cluster.routing.ShardRoutingHelper;
 import org.elasticsearch.common.Randomness;
@@ -31,9 +31,9 @@ import org.elasticsearch.common.lucene.store.ByteArrayIndexInput;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.unit.ByteSizeUnit;
 import org.elasticsearch.common.unit.ByteSizeValue;
+import org.elasticsearch.core.IOUtils;
 import org.elasticsearch.core.Releasable;
 import org.elasticsearch.core.Tuple;
-import org.elasticsearch.core.internal.io.IOUtils;
 import org.elasticsearch.index.engine.NoOpEngine;
 import org.elasticsearch.index.mapper.SourceToParse;
 import org.elasticsearch.index.seqno.SeqNoStats;
@@ -41,6 +41,7 @@ import org.elasticsearch.index.seqno.SequenceNumbers;
 import org.elasticsearch.index.shard.IndexShard;
 import org.elasticsearch.index.shard.IndexShardTestCase;
 import org.elasticsearch.index.shard.ShardId;
+import org.elasticsearch.index.shard.ShardLongFieldRange;
 import org.elasticsearch.index.snapshots.blobstore.BlobStoreIndexShardSnapshot;
 import org.elasticsearch.index.store.Store;
 import org.elasticsearch.index.store.StoreFileMetadata;
@@ -99,11 +100,11 @@ public class PeerRecoveryTargetServiceTests extends IndexShardTestCase {
         final DiscoveryNode pNode = getFakeDiscoNode(sourceShard.routingEntry().currentNodeId());
         final DiscoveryNode rNode = getFakeDiscoNode(targetShard.routingEntry().currentNodeId());
         targetShard.markAsRecovering("test-peer-recovery", new RecoveryState(targetShard.routingEntry(), rNode, pNode));
-        final RecoveryTarget recoveryTarget = new RecoveryTarget(targetShard, null, null, null, null);
+        final RecoveryTarget recoveryTarget = new RecoveryTarget(targetShard, null, 0L, null, null, null);
         final PlainActionFuture<Void> receiveFileInfoFuture = new PlainActionFuture<>();
         recoveryTarget.receiveFileInfo(
-            mdFiles.stream().map(StoreFileMetadata::name).collect(Collectors.toList()),
-            mdFiles.stream().map(StoreFileMetadata::length).collect(Collectors.toList()),
+            mdFiles.stream().map(StoreFileMetadata::name).toList(),
+            mdFiles.stream().map(StoreFileMetadata::length).toList(),
             emptyList(),
             emptyList(),
             0,
@@ -153,7 +154,7 @@ public class PeerRecoveryTargetServiceTests extends IndexShardTestCase {
                             r.content(),
                             r.lastChunk(),
                             r.totalTranslogOps(),
-                            ActionListener.wrap(ignored -> {}, e -> { throw new AssertionError(e); })
+                            ActionTestUtils.assertNoFailureListener(ignored -> {})
                         );
                     }
                 } catch (Exception e) {
@@ -168,7 +169,7 @@ public class PeerRecoveryTargetServiceTests extends IndexShardTestCase {
         PlainActionFuture<Void> cleanFilesFuture = new PlainActionFuture<>();
         recoveryTarget.cleanFiles(
             0,
-            Long.parseLong(sourceSnapshot.getCommitUserData().get(SequenceNumbers.MAX_SEQ_NO)),
+            Long.parseLong(sourceSnapshot.commitUserData().get(SequenceNumbers.MAX_SEQ_NO)),
             sourceSnapshot,
             cleanFilesFuture
         );
@@ -181,7 +182,7 @@ public class PeerRecoveryTargetServiceTests extends IndexShardTestCase {
     }
 
     private SeqNoStats populateRandomData(IndexShard shard) throws IOException {
-        List<Long> seqNos = LongStream.range(0, 100).boxed().collect(Collectors.toList());
+        List<Long> seqNos = LongStream.range(0, 100).boxed().collect(Collectors.toCollection(ArrayList::new));
         Randomness.shuffle(seqNos);
         for (long seqNo : seqNos) {
             shard.applyIndexOperationOnReplica(
@@ -204,13 +205,7 @@ public class PeerRecoveryTargetServiceTests extends IndexShardTestCase {
     }
 
     public void testPrepareIndexForPeerRecovery() throws Exception {
-        DiscoveryNode localNode = new DiscoveryNode(
-            "foo",
-            buildNewFakeTransportAddress(),
-            Collections.emptyMap(),
-            Collections.emptySet(),
-            Version.CURRENT
-        );
+        DiscoveryNode localNode = DiscoveryNodeUtils.builder("foo").roles(Collections.emptySet()).build();
 
         // empty copy
         IndexShard shard = newShard(false);
@@ -294,13 +289,7 @@ public class PeerRecoveryTargetServiceTests extends IndexShardTestCase {
     }
 
     public void testClosedIndexSkipsLocalRecovery() throws Exception {
-        DiscoveryNode localNode = new DiscoveryNode(
-            "foo",
-            buildNewFakeTransportAddress(),
-            Collections.emptyMap(),
-            Collections.emptySet(),
-            Version.CURRENT
-        );
+        DiscoveryNode localNode = DiscoveryNodeUtils.builder("foo").roles(Collections.emptySet()).build();
         IndexShard shard = newStartedShard(false);
         long globalCheckpoint = populateRandomData(shard).getGlobalCheckpoint();
         Optional<SequenceNumbers.CommitInfo> safeCommit = shard.store().findSafeIndexCommit(globalCheckpoint);
@@ -334,26 +323,14 @@ public class PeerRecoveryTargetServiceTests extends IndexShardTestCase {
     public void testResetStartingSeqNoIfLastCommitCorrupted() throws Exception {
         IndexShard shard = newStartedShard(false);
         populateRandomData(shard);
-        DiscoveryNode pNode = new DiscoveryNode(
-            "foo",
-            buildNewFakeTransportAddress(),
-            Collections.emptyMap(),
-            Collections.emptySet(),
-            Version.CURRENT
-        );
-        DiscoveryNode rNode = new DiscoveryNode(
-            "foo",
-            buildNewFakeTransportAddress(),
-            Collections.emptyMap(),
-            Collections.emptySet(),
-            Version.CURRENT
-        );
+        DiscoveryNode pNode = DiscoveryNodeUtils.builder("foo").roles(Collections.emptySet()).build();
+        DiscoveryNode rNode = DiscoveryNodeUtils.builder("foo").roles(Collections.emptySet()).build();
         shard = reinitShard(shard, ShardRoutingHelper.initWithSameId(shard.routingEntry(), RecoverySource.PeerRecoverySource.INSTANCE));
         shard.markAsRecovering("peer recovery", new RecoveryState(shard.routingEntry(), pNode, rNode));
         shard.prepareForIndexRecovery();
         long startingSeqNo = shard.recoverLocallyUpToGlobalCheckpoint();
         shard.store().markStoreCorrupted(new IOException("simulated"));
-        RecoveryTarget recoveryTarget = new RecoveryTarget(shard, null, null, null, null);
+        RecoveryTarget recoveryTarget = new RecoveryTarget(shard, null, 0L, null, null, null);
         StartRecoveryRequest request = PeerRecoveryTargetService.getStartRecoveryRequest(logger, rNode, recoveryTarget, startingSeqNo);
         assertThat(request.startingSeqNo(), equalTo(UNASSIGNED_SEQ_NO));
         assertThat(request.metadataSnapshot().size(), equalTo(0));
@@ -361,21 +338,38 @@ public class PeerRecoveryTargetServiceTests extends IndexShardTestCase {
         closeShards(shard);
     }
 
+    public void testMarkDoneFailureIsPropagated() throws Exception {
+        IndexShard shard = newStartedShard(false);
+        populateRandomData(shard);
+        DiscoveryNode pNode = DiscoveryNodeUtils.builder("foo").roles(Collections.emptySet()).build();
+        DiscoveryNode rNode = DiscoveryNodeUtils.builder("foo").roles(Collections.emptySet()).build();
+        shard = reinitShard(shard, ShardRoutingHelper.initWithSameId(shard.routingEntry(), RecoverySource.PeerRecoverySource.INSTANCE));
+        shard.markAsRecovering("peer recovery", new RecoveryState(shard.routingEntry(), pNode, rNode));
+        shard.prepareForIndexRecovery();
+
+        PlainActionFuture<Void> future = new PlainActionFuture<>();
+        RecoveryTarget recoveryTarget = new RecoveryTarget(shard, null, 0L, null, null, new PeerRecoveryTargetService.RecoveryListener() {
+            @Override
+            public void onRecoveryDone(RecoveryState state, ShardLongFieldRange timestampMillisFieldRange) {
+                future.onResponse(null);
+            }
+
+            @Override
+            public void onRecoveryFailure(RecoveryFailedException e, boolean sendShardFailure) {
+                future.onFailure(e);
+            }
+        });
+        recoveryTarget.markAsDone();
+
+        // The recovery fails because the post recovery step attempts to refresh the engine, but it is not open.
+        expectThrows(RecoveryFailedException.class, future::actionGet);
+
+        closeShards(shard);
+    }
+
     public void testResetStartRequestIfTranslogIsCorrupted() throws Exception {
-        DiscoveryNode pNode = new DiscoveryNode(
-            "foo",
-            buildNewFakeTransportAddress(),
-            Collections.emptyMap(),
-            Collections.emptySet(),
-            Version.CURRENT
-        );
-        DiscoveryNode rNode = new DiscoveryNode(
-            "foo",
-            buildNewFakeTransportAddress(),
-            Collections.emptyMap(),
-            Collections.emptySet(),
-            Version.CURRENT
-        );
+        DiscoveryNode pNode = DiscoveryNodeUtils.builder("foo").roles(Collections.emptySet()).build();
+        DiscoveryNode rNode = DiscoveryNodeUtils.builder("foo").roles(Collections.emptySet()).build();
         IndexShard shard = newStartedShard(false);
         final SeqNoStats seqNoStats = populateRandomData(shard);
         shard.close("test", false);
@@ -394,7 +388,7 @@ public class PeerRecoveryTargetServiceTests extends IndexShardTestCase {
         shard = reinitShard(shard, ShardRoutingHelper.initWithSameId(shard.routingEntry(), RecoverySource.PeerRecoverySource.INSTANCE));
         shard.markAsRecovering("peer recovery", new RecoveryState(shard.routingEntry(), pNode, rNode));
         shard.prepareForIndexRecovery();
-        RecoveryTarget recoveryTarget = new RecoveryTarget(shard, null, null, null, null);
+        RecoveryTarget recoveryTarget = new RecoveryTarget(shard, null, 0L, null, null, null);
         StartRecoveryRequest request = PeerRecoveryTargetService.getStartRecoveryRequest(
             logger,
             rNode,
@@ -408,20 +402,8 @@ public class PeerRecoveryTargetServiceTests extends IndexShardTestCase {
     }
 
     public void testSnapshotFileWrite() throws Exception {
-        DiscoveryNode pNode = new DiscoveryNode(
-            "foo",
-            buildNewFakeTransportAddress(),
-            Collections.emptyMap(),
-            Collections.emptySet(),
-            Version.CURRENT
-        );
-        DiscoveryNode rNode = new DiscoveryNode(
-            "foo",
-            buildNewFakeTransportAddress(),
-            Collections.emptyMap(),
-            Collections.emptySet(),
-            Version.CURRENT
-        );
+        DiscoveryNode pNode = DiscoveryNodeUtils.builder("foo").roles(Collections.emptySet()).build();
+        DiscoveryNode rNode = DiscoveryNodeUtils.builder("foo").roles(Collections.emptySet()).build();
 
         IndexShard shard = newShard(false);
         shard = reinitShard(shard, ShardRoutingHelper.initWithSameId(shard.routingEntry(), RecoverySource.PeerRecoverySource.INSTANCE));
@@ -474,9 +456,9 @@ public class PeerRecoveryTargetServiceTests extends IndexShardTestCase {
         recoveryStateIndex.addFileDetail(storeFileMetadata.name(), storeFileMetadata.length(), false);
         recoveryStateIndex.setFileDetailsComplete();
 
-        RecoveryTarget recoveryTarget = new RecoveryTarget(shard, null, snapshotFilesProvider, () -> {}, null);
+        RecoveryTarget recoveryTarget = new RecoveryTarget(shard, null, 0L, snapshotFilesProvider, () -> {}, null);
 
-        PlainActionFuture<Void> writeSnapshotFileFuture = PlainActionFuture.newFuture();
+        PlainActionFuture<Void> writeSnapshotFileFuture = new PlainActionFuture<>();
         recoveryTarget.restoreFileFromSnapshot(repositoryName, indexId, fileInfo, writeSnapshotFileFuture);
         writeSnapshotFileFuture.get();
 
@@ -507,20 +489,8 @@ public class PeerRecoveryTargetServiceTests extends IndexShardTestCase {
     }
 
     public void testSnapshotFileIsDeletedAfterFailure() throws Exception {
-        DiscoveryNode pNode = new DiscoveryNode(
-            "foo",
-            buildNewFakeTransportAddress(),
-            Collections.emptyMap(),
-            Collections.emptySet(),
-            Version.CURRENT
-        );
-        DiscoveryNode rNode = new DiscoveryNode(
-            "foo",
-            buildNewFakeTransportAddress(),
-            Collections.emptyMap(),
-            Collections.emptySet(),
-            Version.CURRENT
-        );
+        DiscoveryNode pNode = DiscoveryNodeUtils.builder("foo").roles(Collections.emptySet()).build();
+        DiscoveryNode rNode = DiscoveryNodeUtils.builder("foo").roles(Collections.emptySet()).build();
 
         IndexShard shard = newShard(false);
         shard.markAsRecovering("peer recovery", new RecoveryState(shard.routingEntry(), pNode, rNode));
@@ -558,7 +528,7 @@ public class PeerRecoveryTargetServiceTests extends IndexShardTestCase {
         recoveryStateIndex.addFileDetail(storeFileMetadata.name(), storeFileMetadata.length(), false);
         recoveryStateIndex.setFileDetailsComplete();
 
-        RecoveryTarget recoveryTarget = new RecoveryTarget(shard, null, snapshotFilesProvider, () -> {}, null);
+        RecoveryTarget recoveryTarget = new RecoveryTarget(shard, null, 0L, snapshotFilesProvider, () -> {}, null);
 
         String repositoryName = "repo";
         IndexId indexId = new IndexId("index", "uuid");
@@ -568,25 +538,18 @@ public class PeerRecoveryTargetServiceTests extends IndexShardTestCase {
             SNAPSHOT_FILE_PART_SIZE
         );
 
-        PlainActionFuture<Void> writeSnapshotFileFuture = PlainActionFuture.newFuture();
+        PlainActionFuture<Void> writeSnapshotFileFuture = new PlainActionFuture<>();
         recoveryTarget.restoreFileFromSnapshot(repositoryName, indexId, fileInfo, writeSnapshotFileFuture);
         ExecutionException executionException = expectThrows(ExecutionException.class, writeSnapshotFileFuture::get);
 
         Throwable downloadFileError = executionException.getCause();
         switch (downloadFileErrorType) {
-            case CORRUPTED_FILE:
-            case LARGER_THAN_EXPECTED_FILE:
+            case CORRUPTED_FILE, LARGER_THAN_EXPECTED_FILE ->
                 // Files larger than expected are caught by VerifyingIndexInput too
                 assertThat(downloadFileError, is(instanceOf(CorruptIndexException.class)));
-                break;
-            case TRUNCATED_FILE:
-                assertThat(downloadFileError, is(instanceOf(EOFException.class)));
-                break;
-            case FETCH_ERROR:
-                assertThat(downloadFileError, is(instanceOf(RuntimeException.class)));
-                break;
-            default:
-                throw new IllegalStateException("Unexpected value: " + downloadFileErrorType);
+            case TRUNCATED_FILE -> assertThat(downloadFileError, is(instanceOf(EOFException.class)));
+            case FETCH_ERROR -> assertThat(downloadFileError, is(instanceOf(RuntimeException.class)));
+            default -> throw new IllegalStateException("Unexpected value: " + downloadFileErrorType);
         }
 
         assertThat(filesBeforeRestoringSnapshotFile, equalTo(directory.listAll()));
@@ -595,7 +558,7 @@ public class PeerRecoveryTargetServiceTests extends IndexShardTestCase {
         assertThat(fileDetails.recovered(), equalTo(0L));
 
         // Subsequent writes on the same file can proceed without issues
-        PlainActionFuture<Void> writeChunkFuture = PlainActionFuture.newFuture();
+        PlainActionFuture<Void> writeChunkFuture = new PlainActionFuture<>();
         ReleasableBytesReference bytesRef = ReleasableBytesReference.wrap(new BytesArray(fileData));
         recoveryTarget.writeFileChunk(storeFileMetadata, 0, bytesRef, true, 0, writeChunkFuture);
         writeChunkFuture.get();
@@ -607,20 +570,8 @@ public class PeerRecoveryTargetServiceTests extends IndexShardTestCase {
     }
 
     public void testReceiveFileInfoDeletesRecoveredFiles() throws Exception {
-        DiscoveryNode pNode = new DiscoveryNode(
-            "foo",
-            buildNewFakeTransportAddress(),
-            Collections.emptyMap(),
-            Collections.emptySet(),
-            Version.CURRENT
-        );
-        DiscoveryNode rNode = new DiscoveryNode(
-            "foo",
-            buildNewFakeTransportAddress(),
-            Collections.emptyMap(),
-            Collections.emptySet(),
-            Version.CURRENT
-        );
+        DiscoveryNode pNode = DiscoveryNodeUtils.builder("foo").roles(Collections.emptySet()).build();
+        DiscoveryNode rNode = DiscoveryNodeUtils.builder("foo").roles(Collections.emptySet()).build();
 
         IndexShard shard = newShard(false);
         shard = reinitShard(shard, ShardRoutingHelper.initWithSameId(shard.routingEntry(), RecoverySource.PeerRecoverySource.INSTANCE));
@@ -684,13 +635,13 @@ public class PeerRecoveryTargetServiceTests extends IndexShardTestCase {
             }
         };
 
-        RecoveryTarget recoveryTarget = new RecoveryTarget(shard, null, snapshotFilesProvider, () -> {}, null);
+        RecoveryTarget recoveryTarget = new RecoveryTarget(shard, null, 0L, snapshotFilesProvider, () -> {}, null);
 
         String[] fileNamesBeforeRecoveringSnapshotFiles = directory.listAll();
 
         for (Map.Entry<BlobStoreIndexShardSnapshot.FileInfo, byte[]> fileInfoEntry : snapshotFiles.entrySet()) {
             BlobStoreIndexShardSnapshot.FileInfo fileInfo = fileInfoEntry.getKey();
-            PlainActionFuture<Void> writeSnapshotFileFuture = PlainActionFuture.newFuture();
+            PlainActionFuture<Void> writeSnapshotFileFuture = new PlainActionFuture<>();
             recoveryTarget.restoreFileFromSnapshot(repositoryName, indexId, fileInfo, writeSnapshotFileFuture);
 
             // Simulate error, that stops downloading snapshot files
@@ -701,7 +652,7 @@ public class PeerRecoveryTargetServiceTests extends IndexShardTestCase {
             writeSnapshotFileFuture.get();
         }
 
-        PlainActionFuture<Void> future = PlainActionFuture.newFuture();
+        PlainActionFuture<Void> future = new PlainActionFuture<>();
         recoveryTarget.receiveFileInfo(emptyList(), emptyList(), emptyList(), emptyList(), 0, future);
         future.get();
 
@@ -712,20 +663,8 @@ public class PeerRecoveryTargetServiceTests extends IndexShardTestCase {
     }
 
     public void testSnapshotFileAreDeletedAfterCancel() throws Exception {
-        DiscoveryNode pNode = new DiscoveryNode(
-            "foo",
-            buildNewFakeTransportAddress(),
-            Collections.emptyMap(),
-            Collections.emptySet(),
-            Version.CURRENT
-        );
-        DiscoveryNode rNode = new DiscoveryNode(
-            "foo",
-            buildNewFakeTransportAddress(),
-            Collections.emptyMap(),
-            Collections.emptySet(),
-            Version.CURRENT
-        );
+        DiscoveryNode pNode = DiscoveryNodeUtils.builder("foo").roles(Collections.emptySet()).build();
+        DiscoveryNode rNode = DiscoveryNodeUtils.builder("foo").roles(Collections.emptySet()).build();
 
         IndexShard shard = newShard(false);
         shard.markAsRecovering("peer recovery", new RecoveryState(shard.routingEntry(), pNode, rNode));
@@ -762,7 +701,7 @@ public class PeerRecoveryTargetServiceTests extends IndexShardTestCase {
         recoveryStateIndex.addFileDetail(storeFileMetadata.name(), storeFileMetadata.length(), false);
         recoveryStateIndex.setFileDetailsComplete();
 
-        RecoveryTarget recoveryTarget = new RecoveryTarget(shard, null, snapshotFilesProvider, () -> {}, null);
+        RecoveryTarget recoveryTarget = new RecoveryTarget(shard, null, 0L, snapshotFilesProvider, () -> {}, null);
 
         String repository = "repo";
         IndexId indexId = new IndexId("index", "uuid");
@@ -774,7 +713,7 @@ public class PeerRecoveryTargetServiceTests extends IndexShardTestCase {
 
         recoveryTarget.incRef();
 
-        PlainActionFuture<Void> writeSnapshotFileFuture = PlainActionFuture.newFuture();
+        PlainActionFuture<Void> writeSnapshotFileFuture = new PlainActionFuture<>();
         recoveryTarget.restoreFileFromSnapshot(repository, indexId, fileInfo, writeSnapshotFileFuture);
         writeSnapshotFileFuture.get();
 
@@ -799,20 +738,8 @@ public class PeerRecoveryTargetServiceTests extends IndexShardTestCase {
     }
 
     public void testSnapshotFileDownloadPermitIsReleasedAfterClosingRecoveryTarget() throws Exception {
-        DiscoveryNode pNode = new DiscoveryNode(
-            "foo",
-            buildNewFakeTransportAddress(),
-            Collections.emptyMap(),
-            Collections.emptySet(),
-            Version.CURRENT
-        );
-        DiscoveryNode rNode = new DiscoveryNode(
-            "foo",
-            buildNewFakeTransportAddress(),
-            Collections.emptyMap(),
-            Collections.emptySet(),
-            Version.CURRENT
-        );
+        DiscoveryNode pNode = DiscoveryNodeUtils.builder("foo").roles(Collections.emptySet()).build();
+        DiscoveryNode rNode = DiscoveryNodeUtils.builder("foo").roles(Collections.emptySet()).build();
 
         IndexShard shard = newShard(false);
         shard.markAsRecovering("peer recovery", new RecoveryState(shard.routingEntry(), pNode, rNode));
@@ -822,7 +749,7 @@ public class PeerRecoveryTargetServiceTests extends IndexShardTestCase {
         Releasable snapshotFileDownloadsPermit = () -> {
             assertThat(snapshotFileDownloadsPermitFlag.compareAndSet(false, true), is(equalTo(true)));
         };
-        RecoveryTarget recoveryTarget = new RecoveryTarget(shard, null, null, snapshotFileDownloadsPermit, null);
+        RecoveryTarget recoveryTarget = new RecoveryTarget(shard, null, 0L, null, snapshotFileDownloadsPermit, null);
 
         recoveryTarget.decRef();
 
@@ -851,30 +778,31 @@ public class PeerRecoveryTargetServiceTests extends IndexShardTestCase {
 
     private InputStream getFaultyInputStream(DownloadFileErrorType downloadFileErrorType, byte[] fileData) {
         switch (downloadFileErrorType) {
-            case CORRUPTED_FILE:
+            case CORRUPTED_FILE -> {
                 byte[] fileDataCopy = new byte[fileData.length];
                 System.arraycopy(fileData, 0, fileDataCopy, 0, fileData.length);
                 // Corrupt the file
                 for (int i = 0; i < randomIntBetween(1, fileDataCopy.length); i++) {
-                    fileDataCopy[i] ^= 0xFF;
+                    fileDataCopy[i] ^= (byte) 0xFF;
                 }
                 return new ByteArrayInputStream(fileDataCopy);
-            case TRUNCATED_FILE:
+            }
+            case TRUNCATED_FILE -> {
                 final int truncatedFileLength = fileData.length / 2;
                 byte[] truncatedCopy = new byte[truncatedFileLength];
                 System.arraycopy(fileData, 0, truncatedCopy, 0, truncatedFileLength);
                 return new ByteArrayInputStream(truncatedCopy);
-            case LARGER_THAN_EXPECTED_FILE:
+            }
+            case LARGER_THAN_EXPECTED_FILE -> {
                 byte[] largerData = new byte[fileData.length + randomIntBetween(1, 250)];
                 System.arraycopy(fileData, 0, largerData, 0, fileData.length);
                 for (int i = fileData.length; i < largerData.length; i++) {
                     largerData[i] = randomByte();
                 }
                 return new ByteArrayInputStream(largerData);
-            case FETCH_ERROR:
-                throw new RuntimeException("Unexpected error");
-            default:
-                throw new IllegalStateException("Unexpected value: " + downloadFileErrorType);
+            }
+            case FETCH_ERROR -> throw new RuntimeException("Unexpected error");
+            default -> throw new IllegalStateException("Unexpected value: " + downloadFileErrorType);
         }
     }
 }

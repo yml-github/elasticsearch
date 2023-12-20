@@ -76,6 +76,8 @@ public interface XContentGenerator extends Closeable, Flushable {
 
     void writeString(String value) throws IOException;
 
+    void writeStringArray(String[] array) throws IOException;
+
     void writeString(char[] text, int offset, int len) throws IOException;
 
     void writeUTF8String(byte[] value, int offset, int length) throws IOException;
@@ -137,18 +139,10 @@ public interface XContentGenerator extends Closeable, Flushable {
                 break;
             case VALUE_NUMBER:
                 switch (parser.numberType()) {
-                    case INT:
-                        writeNumber(parser.intValue());
-                        break;
-                    case LONG:
-                        writeNumber(parser.longValue());
-                        break;
-                    case FLOAT:
-                        writeNumber(parser.floatValue());
-                        break;
-                    case DOUBLE:
-                        writeNumber(parser.doubleValue());
-                        break;
+                    case INT -> writeNumber(parser.intValue());
+                    case LONG -> writeNumber(parser.longValue());
+                    case FLOAT -> writeNumber(parser.floatValue());
+                    case DOUBLE -> writeNumber(parser.doubleValue());
                 }
                 break;
             case VALUE_BOOLEAN:

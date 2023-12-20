@@ -9,7 +9,6 @@ package org.elasticsearch.xpack.core.async;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-import org.apache.logging.log4j.message.ParameterizedMessage;
 import org.elasticsearch.ExceptionsHelper;
 import org.elasticsearch.ResourceNotFoundException;
 import org.elasticsearch.action.ActionListener;
@@ -22,12 +21,14 @@ import org.elasticsearch.tasks.TaskManager;
 
 import java.util.Objects;
 
+import static org.elasticsearch.core.Strings.format;
+
 /**
  * Service that is capable of retrieving and cleaning up AsyncTasks regardless of their state. It works with the TaskManager, if a task
  * is still running and AsyncTaskIndexService if task results already stored there.
  */
 public class AsyncResultsService<Task extends AsyncTask, Response extends AsyncResponse<Response>> {
-    private final Logger logger = LogManager.getLogger(AsyncResultsService.class);
+    private static final Logger logger = LogManager.getLogger(AsyncResultsService.class);
     private final Class<? extends Task> asyncTaskClass;
     private final TaskManager taskManager;
     private final ClusterService clusterService;
@@ -91,10 +92,7 @@ public class AsyncResultsService<Task extends AsyncTask, Response extends AsyncR
                         RestStatus status = ExceptionsHelper.status(ExceptionsHelper.unwrapCause(exc));
                         if (status != RestStatus.NOT_FOUND) {
                             logger.error(
-                                () -> new ParameterizedMessage(
-                                    "failed to update expiration time for async-search [{}]",
-                                    searchId.getEncoded()
-                                ),
+                                () -> format("failed to update expiration time for async-search [%s]", searchId.getEncoded()),
                                 exc
                             );
                             listener.onFailure(exc);
@@ -122,13 +120,8 @@ public class AsyncResultsService<Task extends AsyncTask, Response extends AsyncR
     ) {
         try {
             final Task task = store.getTaskAndCheckAuthentication(taskManager, searchId, asyncTaskClass);
-            if (task == null) {
+            if (task == null || task.isCancelled()) {
                 getSearchResponseFromIndex(searchId, request, nowInMillis, listener);
-                return;
-            }
-
-            if (task.isCancelled()) {
-                listener.onFailure(new ResourceNotFoundException(searchId.getEncoded()));
                 return;
             }
 

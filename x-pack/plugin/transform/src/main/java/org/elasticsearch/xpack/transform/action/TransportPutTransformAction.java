@@ -9,9 +9,7 @@ package org.elasticsearch.xpack.transform.action;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-import org.apache.logging.log4j.message.ParameterizedMessage;
 import org.elasticsearch.ResourceAlreadyExistsException;
-import org.elasticsearch.Version;
 import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.action.support.ActionFilters;
 import org.elasticsearch.action.support.master.AcknowledgedResponse;
@@ -24,7 +22,7 @@ import org.elasticsearch.cluster.metadata.IndexNameExpressionResolver;
 import org.elasticsearch.cluster.service.ClusterService;
 import org.elasticsearch.common.inject.Inject;
 import org.elasticsearch.common.settings.Settings;
-import org.elasticsearch.ingest.IngestService;
+import org.elasticsearch.common.util.concurrent.EsExecutors;
 import org.elasticsearch.persistent.PersistentTasksCustomMetadata;
 import org.elasticsearch.tasks.Task;
 import org.elasticsearch.threadpool.ThreadPool;
@@ -33,20 +31,25 @@ import org.elasticsearch.xpack.core.ClientHelper;
 import org.elasticsearch.xpack.core.XPackPlugin;
 import org.elasticsearch.xpack.core.XPackSettings;
 import org.elasticsearch.xpack.core.security.SecurityContext;
+import org.elasticsearch.xpack.core.transform.TransformConfigVersion;
 import org.elasticsearch.xpack.core.transform.TransformMessages;
 import org.elasticsearch.xpack.core.transform.action.PutTransformAction;
 import org.elasticsearch.xpack.core.transform.action.PutTransformAction.Request;
 import org.elasticsearch.xpack.core.transform.action.ValidateTransformAction;
+import org.elasticsearch.xpack.core.transform.transforms.AuthorizationState;
 import org.elasticsearch.xpack.core.transform.transforms.TransformConfig;
 import org.elasticsearch.xpack.transform.TransformServices;
 import org.elasticsearch.xpack.transform.notifications.TransformAuditor;
+import org.elasticsearch.xpack.transform.persistence.AuthorizationStatePersistenceUtils;
 import org.elasticsearch.xpack.transform.persistence.TransformConfigManager;
 import org.elasticsearch.xpack.transform.transforms.Function;
 import org.elasticsearch.xpack.transform.transforms.FunctionFactory;
 
 import java.time.Instant;
 import java.util.List;
-import java.util.Map;
+
+import static org.elasticsearch.core.Strings.format;
+import static org.elasticsearch.xpack.transform.utils.SecondaryAuthorizationUtils.getSecurityHeadersPreferringSecondary;
 
 public class TransportPutTransformAction extends AcknowledgedTransportMasterNodeAction<Request> {
 
@@ -67,8 +70,7 @@ public class TransportPutTransformAction extends AcknowledgedTransportMasterNode
         IndexNameExpressionResolver indexNameExpressionResolver,
         ClusterService clusterService,
         TransformServices transformServices,
-        Client client,
-        IngestService ingestService
+        Client client
     ) {
         super(
             PutTransformAction.NAME,
@@ -78,7 +80,7 @@ public class TransportPutTransformAction extends AcknowledgedTransportMasterNode
             actionFilters,
             PutTransformAction.Request::new,
             indexNameExpressionResolver,
-            ThreadPool.Names.SAME
+            EsExecutors.DIRECT_EXECUTOR_SERVICE
         );
         this.settings = settings;
         this.client = client;
@@ -93,10 +95,8 @@ public class TransportPutTransformAction extends AcknowledgedTransportMasterNode
     protected void masterOperation(Task task, Request request, ClusterState clusterState, ActionListener<AcknowledgedResponse> listener) {
         XPackPlugin.checkReadyForXPackCustomMetadata(clusterState);
 
-        // set headers to run transform as calling user
-        Map<String, String> filteredHeaders = ClientHelper.filterSecurityHeaders(threadPool.getThreadContext().getHeaders());
-
-        TransformConfig config = request.getConfig().setHeaders(filteredHeaders).setCreateTime(Instant.now()).setVersion(Version.CURRENT);
+        TransformConfig config = request.getConfig().setCreateTime(Instant.now()).setVersion(TransformConfigVersion.CURRENT);
+        config.setHeaders(getSecurityHeadersPreferringSecondary(threadPool, securityContext, clusterState));
 
         String transformId = config.getId();
         // quick check whether a transform has already been created under that name
@@ -109,30 +109,55 @@ public class TransportPutTransformAction extends AcknowledgedTransportMasterNode
 
         // <3> Create the transform
         ActionListener<ValidateTransformAction.Response> validateTransformListener = ActionListener.wrap(
-            validationResponse -> { putTransform(request, listener); },
+            unusedValidationResponse -> putTransform(request, listener),
             listener::onFailure
         );
 
         // <2> Validate source and destination indices
-        ActionListener<Void> checkPrivilegesListener = ActionListener.wrap(aVoid -> {
-            client.execute(
+        ActionListener<Void> checkPrivilegesListener = ActionListener.wrap(
+            aVoid -> ClientHelper.executeAsyncWithOrigin(
+                client,
+                ClientHelper.TRANSFORM_ORIGIN,
                 ValidateTransformAction.INSTANCE,
                 new ValidateTransformAction.Request(config, request.isDeferValidation(), request.timeout()),
                 validateTransformListener
-            );
-        }, listener::onFailure);
+            ),
+            listener::onFailure
+        );
 
         // <1> Early check to verify that the user can create the destination index and can read from the source
-        if (XPackSettings.SECURITY_ENABLED.get(settings) && request.isDeferValidation() == false) {
+        if (XPackSettings.SECURITY_ENABLED.get(settings)) {
             TransformPrivilegeChecker.checkPrivileges(
                 "create",
+                settings,
                 securityContext,
                 indexNameExpressionResolver,
                 clusterState,
                 client,
                 config,
                 true,
-                checkPrivilegesListener
+                ActionListener.wrap(
+                    aVoid -> AuthorizationStatePersistenceUtils.persistAuthState(
+                        settings,
+                        transformConfigManager,
+                        transformId,
+                        AuthorizationState.green(),
+                        checkPrivilegesListener
+                    ),
+                    e -> {
+                        if (request.isDeferValidation()) {
+                            AuthorizationStatePersistenceUtils.persistAuthState(
+                                settings,
+                                transformConfigManager,
+                                transformId,
+                                AuthorizationState.red(e),
+                                checkPrivilegesListener
+                            );
+                        } else {
+                            checkPrivilegesListener.onFailure(e);
+                        }
+                    }
+                )
             );
         } else { // No security enabled, just move on
             checkPrivilegesListener.onResponse(null);
@@ -156,7 +181,7 @@ public class TransportPutTransformAction extends AcknowledgedTransportMasterNode
             auditor.info(config.getId(), "Created transform.");
             List<String> warnings = TransformConfigLinter.getWarnings(function, config.getSource(), config.getSyncConfig());
             for (String warning : warnings) {
-                logger.warn(new ParameterizedMessage("[{}] {}", config.getId(), warning));
+                logger.warn(() -> format("[%s] %s", config.getId(), warning));
                 auditor.warning(config.getId(), warning);
             }
             listener.onResponse(AcknowledgedResponse.TRUE);

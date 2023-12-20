@@ -7,7 +7,6 @@
  */
 package org.elasticsearch.search.suggest.term;
 
-import org.elasticsearch.ElasticsearchException;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
 import org.elasticsearch.common.text.Text;
@@ -35,7 +34,7 @@ public class TermSuggestion extends Suggestion<TermSuggestion.Entry> {
     public static final Comparator<Suggestion.Entry.Option> SCORE = new Score();
     public static final Comparator<Suggestion.Entry.Option> FREQUENCY = new Frequency();
 
-    private SortBy sort;
+    private final SortBy sort;
 
     public TermSuggestion(String name, int size, SortBy sort) {
         super(name, size);
@@ -86,24 +85,12 @@ public class TermSuggestion extends Suggestion<TermSuggestion.Entry> {
         }
     }
 
-    public void setSort(SortBy sort) {
-        this.sort = sort;
-    }
-
-    public SortBy getSort() {
-        return sort;
-    }
-
     @Override
     protected Comparator<Option> sortComparator() {
-        switch (sort) {
-            case SCORE:
-                return SCORE;
-            case FREQUENCY:
-                return FREQUENCY;
-            default:
-                throw new ElasticsearchException("Could not resolve comparator for sort key: [" + sort + "]");
-        }
+        return switch (sort) {
+            case SCORE -> SCORE;
+            case FREQUENCY -> FREQUENCY;
+        };
     }
 
     @Override
@@ -196,10 +183,6 @@ public class TermSuggestion extends Suggestion<TermSuggestion.Entry> {
             protected void mergeInto(Suggestion.Entry.Option otherOption) {
                 super.mergeInto(otherOption);
                 freq += ((Option) otherOption).freq;
-            }
-
-            public void setFreq(int freq) {
-                this.freq = freq;
             }
 
             /**

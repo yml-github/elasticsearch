@@ -6,13 +6,14 @@
  */
 package org.elasticsearch.xpack.core.ilm;
 
-import org.elasticsearch.Version;
 import org.elasticsearch.cluster.ClusterName;
 import org.elasticsearch.cluster.ClusterState;
 import org.elasticsearch.cluster.metadata.IndexMetadata;
+import org.elasticsearch.cluster.metadata.LifecycleExecutionState;
 import org.elasticsearch.cluster.metadata.Metadata;
 import org.elasticsearch.core.TimeValue;
 import org.elasticsearch.index.Index;
+import org.elasticsearch.index.IndexVersion;
 import org.elasticsearch.xpack.core.ilm.Step.StepKey;
 import org.elasticsearch.xpack.core.ilm.step.info.SingleMessageFieldInfo;
 
@@ -23,8 +24,8 @@ import java.util.Collections;
 import java.util.Map;
 import java.util.UUID;
 
+import static org.elasticsearch.cluster.metadata.LifecycleExecutionState.ILM_CUSTOM_METADATA_KEY;
 import static org.elasticsearch.xpack.core.ilm.ClusterStateWaitUntilThresholdStep.waitedMoreThanThresholdLevel;
-import static org.elasticsearch.xpack.core.ilm.LifecycleExecutionState.ILM_CUSTOM_METADATA_KEY;
 import static org.elasticsearch.xpack.core.ilm.UnfollowAction.CCR_METADATA_KEY;
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.is;
@@ -46,14 +47,12 @@ public class ClusterStateWaitUntilThresholdStepTests extends AbstractStepTestCas
         StepKey nextKeyOnThreshold = instance.getNextKeyOnThreshold();
 
         switch (between(0, 1)) {
-            case 0:
-                stepToExecute = randomValueOtherThan(stepToExecute, () -> new WaitForActiveShardsStep(randomStepKey(), randomStepKey()));
-                break;
-            case 1:
-                nextKeyOnThreshold = randomValueOtherThan(nextKeyOnThreshold, AbstractStepTestCase::randomStepKey);
-                break;
-            default:
-                throw new AssertionError("Illegal randomisation branch");
+            case 0 -> stepToExecute = randomValueOtherThan(
+                stepToExecute,
+                () -> new WaitForActiveShardsStep(randomStepKey(), randomStepKey())
+            );
+            case 1 -> nextKeyOnThreshold = randomValueOtherThan(nextKeyOnThreshold, AbstractStepTestCase::randomStepKey);
+            default -> throw new AssertionError("Illegal randomisation branch");
         }
 
         return new ClusterStateWaitUntilThresholdStep(stepToExecute, nextKeyOnThreshold);
@@ -80,7 +79,7 @@ public class ClusterStateWaitUntilThresholdStepTests extends AbstractStepTestCas
             // threshold is not breached and the underlying step condition is met
             IndexMetadata indexMetadata = IndexMetadata.builder("follower-index")
                 .settings(
-                    settings(Version.CURRENT).put(LifecycleSettings.LIFECYCLE_INDEXING_COMPLETE, "true")
+                    settings(IndexVersion.current()).put(LifecycleSettings.LIFECYCLE_INDEXING_COMPLETE, "true")
                         .put(LifecycleSettings.LIFECYCLE_STEP_WAIT_TIME_THRESHOLD, "480h")
                 )
                 .putCustom(ILM_CUSTOM_METADATA_KEY, Map.of("step_time", String.valueOf(System.currentTimeMillis())))
@@ -104,7 +103,7 @@ public class ClusterStateWaitUntilThresholdStepTests extends AbstractStepTestCas
             // threshold is not breached and the underlying step condition is NOT met
             IndexMetadata indexMetadata = IndexMetadata.builder("follower-index")
                 .settings(
-                    settings(Version.CURRENT).put(LifecycleSettings.LIFECYCLE_INDEXING_COMPLETE, "false")
+                    settings(IndexVersion.current()).put(LifecycleSettings.LIFECYCLE_INDEXING_COMPLETE, "false")
                         .put(LifecycleSettings.LIFECYCLE_STEP_WAIT_TIME_THRESHOLD, "48h")
                 )
                 .putCustom(ILM_CUSTOM_METADATA_KEY, Map.of("step_time", String.valueOf(System.currentTimeMillis())))
@@ -138,7 +137,7 @@ public class ClusterStateWaitUntilThresholdStepTests extends AbstractStepTestCas
             // underlying step is executed once even if the threshold is breached and the underlying complete result is returned
             IndexMetadata indexMetadata = IndexMetadata.builder("follower-index")
                 .settings(
-                    settings(Version.CURRENT).put(LifecycleSettings.LIFECYCLE_INDEXING_COMPLETE, "true")
+                    settings(IndexVersion.current()).put(LifecycleSettings.LIFECYCLE_INDEXING_COMPLETE, "true")
                         .put(LifecycleSettings.LIFECYCLE_STEP_WAIT_TIME_THRESHOLD, "1s")
                 )
                 .putCustom(CCR_METADATA_KEY, Collections.emptyMap())
@@ -166,7 +165,7 @@ public class ClusterStateWaitUntilThresholdStepTests extends AbstractStepTestCas
             // step under test will return `complete` (becuase the threshold is breached and we don't want to wait anymore)
             IndexMetadata indexMetadata = IndexMetadata.builder("follower-index")
                 .settings(
-                    settings(Version.CURRENT).put(LifecycleSettings.LIFECYCLE_INDEXING_COMPLETE, "false")
+                    settings(IndexVersion.current()).put(LifecycleSettings.LIFECYCLE_INDEXING_COMPLETE, "false")
                         .put(LifecycleSettings.LIFECYCLE_STEP_WAIT_TIME_THRESHOLD, "1h")
                 )
                 .putCustom(CCR_METADATA_KEY, Collections.emptyMap())
@@ -192,9 +191,9 @@ public class ClusterStateWaitUntilThresholdStepTests extends AbstractStepTestCas
                 info.getMessage(),
                 equalTo(
                     "["
-                        + currentStepKey.getName()
+                        + currentStepKey.name()
                         + "] lifecycle step, as part of ["
-                        + currentStepKey.getAction()
+                        + currentStepKey.action()
                         + "] "
                         + "action, for index [follower-index] executed for more than [1h]. Abandoning execution and moving to the next "
                         + "fallback step ["
@@ -243,7 +242,7 @@ public class ClusterStateWaitUntilThresholdStepTests extends AbstractStepTestCas
 
     public void testIsCompletableBreaches() {
         IndexMetadata indexMetadata = IndexMetadata.builder("index")
-            .settings(settings(Version.CURRENT))
+            .settings(settings(IndexVersion.current()))
             .numberOfShards(1)
             .numberOfReplicas(0)
             .putCustom(ILM_CUSTOM_METADATA_KEY, Map.of("step_time", String.valueOf(Clock.systemUTC().millis())))
@@ -261,11 +260,6 @@ public class ClusterStateWaitUntilThresholdStepTests extends AbstractStepTestCas
                 }
 
                 @Override
-                public boolean isCompletable() {
-                    return true;
-                }
-
-                @Override
                 public boolean isRetryable() {
                     return true;
                 }
@@ -275,7 +269,7 @@ public class ClusterStateWaitUntilThresholdStepTests extends AbstractStepTestCas
 
         assertFalse(step.isConditionMet(indexMetadata.getIndex(), clusterState).isComplete());
 
-        assertThat(step.getNextStepKey().getName(), equalTo("next-key"));
+        assertThat(step.getNextStepKey().name(), equalTo("next-key"));
 
         step = new ClusterStateWaitUntilThresholdStep(
             new ClusterStateWaitStep(new StepKey("phase", "action", "key"), new StepKey("phase", "action", "next-key")) {
@@ -297,6 +291,6 @@ public class ClusterStateWaitUntilThresholdStepTests extends AbstractStepTestCas
             new StepKey("phase", "action", "breached")
         );
         assertTrue(step.isConditionMet(indexMetadata.getIndex(), clusterState).isComplete());
-        assertThat(step.getNextStepKey().getName(), equalTo("breached"));
+        assertThat(step.getNextStepKey().name(), equalTo("breached"));
     }
 }

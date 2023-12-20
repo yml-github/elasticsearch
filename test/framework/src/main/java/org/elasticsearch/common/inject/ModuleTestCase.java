@@ -25,7 +25,7 @@ public abstract class ModuleTestCase extends ESTestCase {
      * Configures the module, and ensures an instance is bound to the "to" class, and the
      * provided tester returns true on the instance.
      */
-    public <T> void assertInstanceBinding(Module module, Class<T> to, Predicate<T> tester) {
+    public static <T> void assertInstanceBinding(Module module, Class<T> to, Predicate<T> tester) {
         assertInstanceBindingWithAnnotation(module, to, tester, null);
     }
 
@@ -33,7 +33,7 @@ public abstract class ModuleTestCase extends ESTestCase {
      * Like {@link #assertInstanceBinding(Module, Class, Predicate)}, but filters the
      * classes checked by the given annotation.
      */
-    private <T> void assertInstanceBindingWithAnnotation(
+    private static <T> void assertInstanceBindingWithAnnotation(
         Module module,
         Class<T> to,
         Predicate<T> tester,
@@ -41,16 +41,14 @@ public abstract class ModuleTestCase extends ESTestCase {
     ) {
         List<Element> elements = Elements.getElements(module);
         for (Element element : elements) {
-            if (element instanceof InstanceBinding) {
-                InstanceBinding<?> binding = (InstanceBinding<?>) element;
+            if (element instanceof InstanceBinding<?> binding) {
                 if (to.equals(binding.getKey().getTypeLiteral().getType())) {
                     if (annotation == null || annotation.equals(binding.getKey().getAnnotationType())) {
                         assertTrue(tester.test(to.cast(binding.getInstance())));
                         return;
                     }
                 }
-            } else if (element instanceof ProviderInstanceBinding) {
-                ProviderInstanceBinding<?> binding = (ProviderInstanceBinding<?>) element;
+            } else if (element instanceof ProviderInstanceBinding<?> binding) {
                 if (to.equals(binding.getKey().getTypeLiteral().getType())) {
                     assertTrue(tester.test(to.cast(binding.getProviderInstance().get())));
                     return;

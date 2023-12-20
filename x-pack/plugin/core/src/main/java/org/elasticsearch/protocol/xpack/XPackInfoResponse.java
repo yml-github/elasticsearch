@@ -6,12 +6,13 @@
  */
 package org.elasticsearch.protocol.xpack;
 
-import org.elasticsearch.Version;
+import org.elasticsearch.TransportVersions;
 import org.elasticsearch.action.ActionResponse;
 import org.elasticsearch.common.Strings;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
 import org.elasticsearch.common.io.stream.Writeable;
+import org.elasticsearch.common.util.Maps;
 import org.elasticsearch.core.Nullable;
 import org.elasticsearch.core.RestApiVersion;
 import org.elasticsearch.license.License;
@@ -25,13 +26,11 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.EnumSet;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
-import java.util.stream.Collectors;
 
 import static org.elasticsearch.xcontent.ConstructingObjectParser.constructorArg;
 
@@ -297,7 +296,7 @@ public class XPackInfoResponse extends ActionResponse implements ToXContentObjec
         private final Map<String, FeatureSet> featureSets;
 
         public FeatureSetsInfo(Set<FeatureSet> featureSets) {
-            Map<String, FeatureSet> map = new HashMap<>(featureSets.size());
+            Map<String, FeatureSet> map = Maps.newMapWithExpectedSize(featureSets.size());
             for (FeatureSet featureSet : featureSets) {
                 map.put(featureSet.name, featureSet);
             }
@@ -306,7 +305,7 @@ public class XPackInfoResponse extends ActionResponse implements ToXContentObjec
 
         public FeatureSetsInfo(StreamInput in) throws IOException {
             int size = in.readVInt();
-            Map<String, FeatureSet> featureSets = new HashMap<>(size);
+            Map<String, FeatureSet> featureSets = Maps.newMapWithExpectedSize(size);
             for (int i = 0; i < size; i++) {
                 FeatureSet featureSet = new FeatureSet(in);
                 featureSets.put(featureSet.name, featureSet);
@@ -342,7 +341,7 @@ public class XPackInfoResponse extends ActionResponse implements ToXContentObjec
         @Override
         public XContentBuilder toXContent(XContentBuilder builder, Params params) throws IOException {
             builder.startObject();
-            List<String> names = new ArrayList<>(this.featureSets.keySet()).stream().sorted().collect(Collectors.toList());
+            List<String> names = new ArrayList<>(this.featureSets.keySet()).stream().sorted().toList();
             for (String name : names) {
                 builder.field(name, featureSets.get(name), params);
             }
@@ -362,7 +361,7 @@ public class XPackInfoResponse extends ActionResponse implements ToXContentObjec
 
             public FeatureSet(StreamInput in) throws IOException {
                 this(in.readString(), readAvailable(in), in.readBoolean());
-                if (in.getVersion().before(Version.V_8_0_0)) {
+                if (in.getTransportVersion().before(TransportVersions.V_8_0_0)) {
                     in.readMap(); // backcompat reading native code info, but no longer used here
                 }
             }
@@ -370,7 +369,7 @@ public class XPackInfoResponse extends ActionResponse implements ToXContentObjec
             // this is separated out so that the removed description can be read from the stream on construction
             // TODO: remove this for 8.0
             private static boolean readAvailable(StreamInput in) throws IOException {
-                if (in.getVersion().before(Version.V_7_3_0)) {
+                if (in.getTransportVersion().before(TransportVersions.V_7_3_0)) {
                     in.readOptionalString();
                 }
                 return in.readBoolean();
@@ -379,13 +378,13 @@ public class XPackInfoResponse extends ActionResponse implements ToXContentObjec
             @Override
             public void writeTo(StreamOutput out) throws IOException {
                 out.writeString(name);
-                if (out.getVersion().before(Version.V_7_3_0)) {
+                if (out.getTransportVersion().before(TransportVersions.V_7_3_0)) {
                     out.writeOptionalString(null);
                 }
                 out.writeBoolean(available);
                 out.writeBoolean(enabled);
-                if (out.getVersion().before(Version.V_8_0_0)) {
-                    out.writeMap(Collections.emptyMap());
+                if (out.getTransportVersion().before(TransportVersions.V_8_0_0)) {
+                    out.writeGenericMap(Collections.emptyMap());
                 }
             }
 

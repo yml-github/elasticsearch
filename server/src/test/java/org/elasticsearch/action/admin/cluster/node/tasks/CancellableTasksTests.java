@@ -10,7 +10,7 @@ package org.elasticsearch.action.admin.cluster.node.tasks;
 import com.carrotsearch.randomizedtesting.RandomizedContext;
 import com.carrotsearch.randomizedtesting.generators.RandomNumbers;
 
-import org.elasticsearch.Version;
+import org.elasticsearch.TransportVersion;
 import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.action.admin.cluster.node.tasks.cancel.CancelTasksAction;
 import org.elasticsearch.action.admin.cluster.node.tasks.cancel.CancelTasksRequest;
@@ -31,6 +31,7 @@ import org.elasticsearch.tasks.TaskCancelledException;
 import org.elasticsearch.tasks.TaskId;
 import org.elasticsearch.tasks.TaskInfo;
 import org.elasticsearch.tasks.TaskManager;
+import org.elasticsearch.test.ReachabilityChecker;
 import org.elasticsearch.threadpool.ThreadPool;
 import org.elasticsearch.transport.FakeTcpChannel;
 import org.elasticsearch.transport.TestTransportChannels;
@@ -44,12 +45,10 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
-import java.util.concurrent.BrokenBarrierException;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.Phaser;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicIntegerArray;
 import java.util.concurrent.atomic.AtomicReference;
@@ -187,6 +186,19 @@ public class CancellableTasksTests extends TaskManagerTestCase {
         }
     }
 
+    /**
+     * Simulates a cancellation listener and sets a flag to true if the task was cancelled
+     */
+    static class CancellableTestCancellationListener implements CancellableTask.CancellationListener {
+
+        final AtomicBoolean calledUponCancellation = new AtomicBoolean(false);
+
+        @Override
+        public void onCancelled() {
+            calledUponCancellation.set(true);
+        }
+    }
+
     private Task startCancellableTestNodesAction(
         boolean waitForActionToStart,
         int runNodesCount,
@@ -232,14 +244,7 @@ public class CancellableTasksTests extends TaskManagerTestCase {
             );
         }
         Task task = testNodes[0].transportService.getTaskManager()
-            .registerAndExecute(
-                "transport",
-                actions[0],
-                request,
-                testNodes[0].transportService.getLocalNodeConnection(),
-                (t, r) -> listener.onResponse(r),
-                (t, e) -> listener.onFailure(e)
-            );
+            .registerAndExecute("transport", actions[0], request, testNodes[0].transportService.getLocalNodeConnection(), listener);
         if (waitForActionToStart) {
             logger.info("Awaiting for all actions to start");
             actionLatch.await();
@@ -252,6 +257,7 @@ public class CancellableTasksTests extends TaskManagerTestCase {
         setupTestNodes(Settings.EMPTY);
         connectNodes(testNodes);
         CountDownLatch responseLatch = new CountDownLatch(1);
+        AtomicBoolean listenerCalledUponCancellation = new AtomicBoolean(false);
         boolean waitForActionToStart = randomBoolean();
         logger.info("waitForActionToStart is set to {}", waitForActionToStart);
         final AtomicReference<NodesResponse> responseReference = new AtomicReference<>();
@@ -260,24 +266,23 @@ public class CancellableTasksTests extends TaskManagerTestCase {
         // Block at least 1 node, otherwise it's quite easy to end up in a race condition where the node tasks
         // have finished before the cancel request has arrived
         int blockedNodesCount = randomIntBetween(1, runNodesCount);
-        Task mainTask = startCancellableTestNodesAction(
-            waitForActionToStart,
-            runNodesCount,
-            blockedNodesCount,
-            new ActionListener<NodesResponse>() {
-                @Override
-                public void onResponse(NodesResponse listTasksResponse) {
-                    responseReference.set(listTasksResponse);
-                    responseLatch.countDown();
-                }
-
-                @Override
-                public void onFailure(Exception e) {
-                    throwableReference.set(e);
-                    responseLatch.countDown();
-                }
+        Task mainTask = startCancellableTestNodesAction(waitForActionToStart, runNodesCount, blockedNodesCount, new ActionListener<>() {
+            @Override
+            public void onResponse(NodesResponse listTasksResponse) {
+                responseReference.set(listTasksResponse);
+                responseLatch.countDown();
             }
-        );
+
+            @Override
+            public void onFailure(Exception e) {
+                throwableReference.set(e);
+                responseLatch.countDown();
+            }
+        });
+
+        assert mainTask instanceof CancellableTask;
+        CancellableTestCancellationListener listenerAddedBeforeCancellation = new CancellableTestCancellationListener();
+        ((CancellableTask) mainTask).addListener(listenerAddedBeforeCancellation);
 
         // Cancel main task
         CancelTasksRequest request = new CancelTasksRequest();
@@ -306,11 +311,18 @@ public class CancellableTasksTests extends TaskManagerTestCase {
 
             // We should have the information about the cancelled task in the cancel operation response
             assertEquals(1, response.getTasks().size());
-            assertEquals(mainTask.getId(), response.getTasks().get(0).getId());
+            assertEquals(mainTask.getId(), response.getTasks().get(0).id());
             // Verify that all cancelled tasks reported that they support cancellation
             for (TaskInfo taskInfo : response.getTasks()) {
-                assertTrue(taskInfo.isCancellable());
+                assertTrue(taskInfo.cancellable());
             }
+
+            CancellableTestCancellationListener listenerAddedAfterCancellation = new CancellableTestCancellationListener();
+            ((CancellableTask) mainTask).addListener(listenerAddedAfterCancellation);
+
+            // Verify both cancellation listeners have been notified
+            assertTrue(listenerAddedBeforeCancellation.calledUponCancellation.get());
+            assertTrue(listenerAddedAfterCancellation.calledUponCancellation.get());
         }
 
         // Make sure that tasks are no longer running
@@ -337,7 +349,7 @@ public class CancellableTasksTests extends TaskManagerTestCase {
         final AtomicReference<Throwable> throwableReference = new AtomicReference<>();
         int runNodesCount = randomIntBetween(1, nodesCount);
         int blockedNodesCount = randomIntBetween(0, runNodesCount);
-        Task mainTask = startCancellableTestNodesAction(true, runNodesCount, blockedNodesCount, new ActionListener<NodesResponse>() {
+        Task mainTask = startCancellableTestNodesAction(true, runNodesCount, blockedNodesCount, new ActionListener<>() {
             @Override
             public void onResponse(NodesResponse listTasksResponse) {
                 responseReference.set(listTasksResponse);
@@ -385,7 +397,7 @@ public class CancellableTasksTests extends TaskManagerTestCase {
         final TaskManager taskManager = testNodes[0].transportService.getTaskManager();
         CancellableNodesRequest parentRequest = new CancellableNodesRequest("parent");
         final Task parentTask = taskManager.register("test", "test", parentRequest);
-        final TaskId parentTaskId = parentTask.taskInfo(testNodes[0].getNodeId(), false).getTaskId();
+        final TaskId parentTaskId = parentTask.taskInfo(testNodes[0].getNodeId(), false).taskId();
         taskManager.setBan(
             new TaskId(testNodes[0].getNodeId(), parentTask.getId()),
             "test",
@@ -395,7 +407,7 @@ public class CancellableTasksTests extends TaskManagerTestCase {
                 threadPool,
                 "test",
                 randomNonNegativeLong(),
-                Version.CURRENT
+                TransportVersion.current()
             )
         );
         CancellableNodesRequest childRequest = new CancellableNodesRequest("child");
@@ -415,8 +427,7 @@ public class CancellableTasksTests extends TaskManagerTestCase {
                 testAction,
                 childRequest,
                 testNodes[0].transportService.getLocalNodeConnection(),
-                (task, response) -> {},
-                (task, e) -> {}
+                ActionListener.noop()
             )
         );
         assertThat(cancelledException.getMessage(), equalTo("task cancelled before starting [test]"));
@@ -614,18 +625,7 @@ public class CancellableTasksTests extends TaskManagerTestCase {
 
         TaskCancelHelper.cancel(task, "simulated");
 
-        final Runnable await = new Runnable() {
-            final CyclicBarrier barrier = new CyclicBarrier(2);
-
-            @Override
-            public void run() {
-                try {
-                    barrier.await(5, TimeUnit.SECONDS);
-                } catch (InterruptedException | BrokenBarrierException | TimeoutException e) {
-                    throw new AssertionError("unexpected", e);
-                }
-            }
-        };
+        final CyclicBarrier barrier = new CyclicBarrier(2);
 
         final Thread concurrentNotify = new Thread(() -> task.notifyIfCancelled(new ActionListener<Void>() {
             @Override
@@ -635,19 +635,31 @@ public class CancellableTasksTests extends TaskManagerTestCase {
 
             @Override
             public void onFailure(Exception e) {
-                await.run();
+                safeAwait(barrier);
                 // main thread calls notifyIfCancelled again between these two blocks
-                await.run();
+                safeAwait(barrier);
             }
         }), "concurrent notify");
         concurrentNotify.start();
 
-        await.run();
+        safeAwait(barrier);
         task.notifyIfCancelled(future);
         assertTrue(future.isDone());
         assertThat(expectThrows(TaskCancelledException.class, future::actionGet).getMessage(), equalTo("task cancelled [simulated]"));
-        await.run();
+        safeAwait(barrier);
         concurrentNotify.join();
+    }
+
+    public void testReleaseListenersOnCancellation() {
+        final CancellableTask task = new CancellableTask(randomLong(), "transport", "action", "", TaskId.EMPTY_TASK_ID, emptyMap());
+        final AtomicBoolean cancelNotified = new AtomicBoolean();
+        final ReachabilityChecker reachabilityChecker = new ReachabilityChecker();
+        task.addListener(reachabilityChecker.register(() -> assertTrue(cancelNotified.compareAndSet(false, true))));
+
+        reachabilityChecker.checkReachable();
+        TaskCancelHelper.cancel(task, "simulated");
+        reachabilityChecker.ensureUnreachable();
+        assertTrue(cancelNotified.get());
     }
 
 }

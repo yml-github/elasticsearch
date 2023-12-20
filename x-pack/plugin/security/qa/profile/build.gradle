@@ -1,3 +1,5 @@
+import org.elasticsearch.gradle.internal.info.BuildParams
+
 apply plugin: 'elasticsearch.internal-java-rest-test'
 
 dependencies {
@@ -6,18 +8,9 @@ dependencies {
   javaRestTestImplementation project(':x-pack:plugin:security')
 }
 
-testClusters.matching { it.name == 'javaRestTest' }.configureEach {
-  testDistribution = 'DEFAULT'
-  numberOfNodes = 2
+boolean literalUsername = BuildParams.random.nextBoolean()
 
-  extraConfigFile 'roles.yml', file('src/javaRestTest/resources/roles.yml')
-
-  setting 'xpack.ml.enabled', 'false'
-  setting 'xpack.license.self_generated.type', 'trial'
-
-  setting 'xpack.security.enabled', 'true'
-  setting 'xpack.security.authc.token.enabled', 'true'
-  setting 'xpack.security.authc.api_key.enabled', 'true'
-
-  user username: "test_admin", password: 'x-pack-test-password', role: "superuser"
+tasks.named("javaRestTest").configure {
+  usesDefaultDistribution()
+  systemProperty 'test.literalUsername', literalUsername
 }

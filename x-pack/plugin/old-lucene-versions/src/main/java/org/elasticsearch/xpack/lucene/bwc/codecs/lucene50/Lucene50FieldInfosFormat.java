@@ -29,6 +29,7 @@ import org.apache.lucene.index.FieldInfos;
 import org.apache.lucene.index.IndexFileNames;
 import org.apache.lucene.index.IndexOptions;
 import org.apache.lucene.index.SegmentInfo;
+import org.apache.lucene.index.VectorEncoding;
 import org.apache.lucene.index.VectorSimilarityFunction;
 import org.apache.lucene.store.ChecksumIndexInput;
 import org.apache.lucene.store.Directory;
@@ -108,6 +109,7 @@ public final class Lucene50FieldInfosFormat extends FieldInfosFormat {
                             0,
                             0,
                             0,
+                            VectorEncoding.FLOAT32,
                             VectorSimilarityFunction.EUCLIDEAN,
                             false
                         );
@@ -126,40 +128,28 @@ public final class Lucene50FieldInfosFormat extends FieldInfosFormat {
     }
 
     private static DocValuesType getDocValuesType(IndexInput input, byte b) throws IOException {
-        switch (b) {
-            case 0:
-                return DocValuesType.NONE;
-            case 1:
-                return DocValuesType.NUMERIC;
-            case 2:
-                return DocValuesType.BINARY;
-            case 3:
-                return DocValuesType.SORTED;
-            case 4:
-                return DocValuesType.SORTED_SET;
-            case 5:
-                return DocValuesType.SORTED_NUMERIC;
-            default:
-                throw new CorruptIndexException("invalid docvalues byte: " + b, input);
-        }
+        return switch (b) {
+            case 0 -> DocValuesType.NONE;
+            case 1 -> DocValuesType.NUMERIC;
+            case 2 -> DocValuesType.BINARY;
+            case 3 -> DocValuesType.SORTED;
+            case 4 -> DocValuesType.SORTED_SET;
+            case 5 -> DocValuesType.SORTED_NUMERIC;
+            default -> throw new CorruptIndexException("invalid docvalues byte: " + b, input);
+        };
     }
 
     private static IndexOptions getIndexOptions(IndexInput input, byte b) throws IOException {
-        switch (b) {
-            case 0:
-                return IndexOptions.NONE;
-            case 1:
-                return IndexOptions.DOCS;
-            case 2:
-                return IndexOptions.DOCS_AND_FREQS;
-            case 3:
-                return IndexOptions.DOCS_AND_FREQS_AND_POSITIONS;
-            case 4:
-                return IndexOptions.DOCS_AND_FREQS_AND_POSITIONS_AND_OFFSETS;
-            default:
+        return switch (b) {
+            case 0 -> IndexOptions.NONE;
+            case 1 -> IndexOptions.DOCS;
+            case 2 -> IndexOptions.DOCS_AND_FREQS;
+            case 3 -> IndexOptions.DOCS_AND_FREQS_AND_POSITIONS;
+            case 4 -> IndexOptions.DOCS_AND_FREQS_AND_POSITIONS_AND_OFFSETS;
+            default ->
                 // BUG
                 throw new CorruptIndexException("invalid IndexOptions byte: " + b, input);
-        }
+        };
     }
 
     @Override

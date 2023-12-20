@@ -7,7 +7,6 @@
  */
 package org.elasticsearch.search.aggregations.metrics;
 
-import org.apache.lucene.index.LeafReaderContext;
 import org.apache.lucene.search.ScoreMode;
 import org.elasticsearch.common.util.BigArrays;
 import org.elasticsearch.common.util.DoubleArray;
@@ -15,6 +14,7 @@ import org.elasticsearch.common.util.LongArray;
 import org.elasticsearch.core.Releasables;
 import org.elasticsearch.index.fielddata.SortedNumericDoubleValues;
 import org.elasticsearch.search.DocValueFormat;
+import org.elasticsearch.search.aggregations.AggregationExecutionContext;
 import org.elasticsearch.search.aggregations.Aggregator;
 import org.elasticsearch.search.aggregations.InternalAggregation;
 import org.elasticsearch.search.aggregations.LeafBucketCollector;
@@ -45,42 +45,37 @@ class ExtendedStatsAggregator extends NumericMetricsAggregator.MultiValue {
 
     ExtendedStatsAggregator(
         String name,
-        ValuesSourceConfig valuesSourceConfig,
+        ValuesSourceConfig config,
         AggregationContext context,
         Aggregator parent,
         double sigma,
         Map<String, Object> metadata
     ) throws IOException {
         super(name, context, parent, metadata);
-        // TODO: stop depending on nulls here
-        this.valuesSource = valuesSourceConfig.hasValues() ? (ValuesSource.Numeric) valuesSourceConfig.getValuesSource() : null;
-        this.format = valuesSourceConfig.format();
+        assert config.hasValues();
+        this.valuesSource = (ValuesSource.Numeric) config.getValuesSource();
+        this.format = config.format();
         this.sigma = sigma;
-        if (valuesSource != null) {
-            final BigArrays bigArrays = context.bigArrays();
-            counts = bigArrays.newLongArray(1, true);
-            sums = bigArrays.newDoubleArray(1, true);
-            compensations = bigArrays.newDoubleArray(1, true);
-            mins = bigArrays.newDoubleArray(1, false);
-            mins.fill(0, mins.size(), Double.POSITIVE_INFINITY);
-            maxes = bigArrays.newDoubleArray(1, false);
-            maxes.fill(0, maxes.size(), Double.NEGATIVE_INFINITY);
-            sumOfSqrs = bigArrays.newDoubleArray(1, true);
-            compensationOfSqrs = bigArrays.newDoubleArray(1, true);
-        }
+        final BigArrays bigArrays = context.bigArrays();
+        counts = bigArrays.newLongArray(1, true);
+        sums = bigArrays.newDoubleArray(1, true);
+        compensations = bigArrays.newDoubleArray(1, true);
+        mins = bigArrays.newDoubleArray(1, false);
+        mins.fill(0, mins.size(), Double.POSITIVE_INFINITY);
+        maxes = bigArrays.newDoubleArray(1, false);
+        maxes.fill(0, maxes.size(), Double.NEGATIVE_INFINITY);
+        sumOfSqrs = bigArrays.newDoubleArray(1, true);
+        compensationOfSqrs = bigArrays.newDoubleArray(1, true);
     }
 
     @Override
     public ScoreMode scoreMode() {
-        return valuesSource != null && valuesSource.needsScores() ? ScoreMode.COMPLETE : ScoreMode.COMPLETE_NO_SCORES;
+        return valuesSource.needsScores() ? ScoreMode.COMPLETE : ScoreMode.COMPLETE_NO_SCORES;
     }
 
     @Override
-    public LeafBucketCollector getLeafCollector(LeafReaderContext ctx, final LeafBucketCollector sub) throws IOException {
-        if (valuesSource == null) {
-            return LeafBucketCollector.NO_OP_COLLECTOR;
-        }
-        final SortedNumericDoubleValues values = valuesSource.doubleValues(ctx);
+    public LeafBucketCollector getLeafCollector(AggregationExecutionContext aggCtx, final LeafBucketCollector sub) throws IOException {
+        final SortedNumericDoubleValues values = valuesSource.doubleValues(aggCtx.getLeafReaderContext());
         final CompensatedSum compensatedSum = new CompensatedSum(0, 0);
         final CompensatedSum compensatedSumOfSqr = new CompensatedSum(0, 0);
         return new LeafBucketCollectorBase(sub, values) {
@@ -138,82 +133,38 @@ class ExtendedStatsAggregator extends NumericMetricsAggregator.MultiValue {
 
     @Override
     public boolean hasMetric(String name) {
-        try {
-            InternalExtendedStats.Metrics.resolve(name);
-            return true;
-        } catch (IllegalArgumentException iae) {
-            return false;
-        }
+        return InternalExtendedStats.Metrics.hasMetric(name);
     }
 
     @Override
     public double metric(String name, long owningBucketOrd) {
-        if (valuesSource == null || owningBucketOrd >= counts.size()) {
-            switch (InternalExtendedStats.Metrics.resolve(name)) {
-                case count:
-                    return 0;
-                case sum:
-                    return 0;
-                case min:
-                    return Double.POSITIVE_INFINITY;
-                case max:
-                    return Double.NEGATIVE_INFINITY;
-                case avg:
-                    return Double.NaN;
-                case sum_of_squares:
-                    return 0;
-                case variance:
-                    return Double.NaN;
-                case variance_population:
-                    return Double.NaN;
-                case variance_sampling:
-                    return Double.NaN;
-                case std_deviation:
-                    return Double.NaN;
-                case std_deviation_population:
-                    return Double.NaN;
-                case std_deviation_sampling:
-                    return Double.NaN;
-                case std_upper:
-                    return Double.NaN;
-                case std_lower:
-                    return Double.NaN;
-                default:
-                    throw new IllegalArgumentException("Unknown value [" + name + "] in common stats aggregation");
-            }
+        if (owningBucketOrd >= counts.size()) {
+            return switch (InternalExtendedStats.Metrics.resolve(name)) {
+                case count, sum_of_squares, sum -> 0;
+                case min -> Double.POSITIVE_INFINITY;
+                case max -> Double.NEGATIVE_INFINITY;
+                case avg, variance, variance_population, variance_sampling, std_deviation, std_deviation_population, std_deviation_sampling,
+                    std_upper, std_lower -> Double.NaN;
+                default -> throw new IllegalArgumentException("Unknown value [" + name + "] in common stats aggregation");
+            };
         }
-        switch (InternalExtendedStats.Metrics.resolve(name)) {
-            case count:
-                return counts.get(owningBucketOrd);
-            case sum:
-                return sums.get(owningBucketOrd);
-            case min:
-                return mins.get(owningBucketOrd);
-            case max:
-                return maxes.get(owningBucketOrd);
-            case avg:
-                return sums.get(owningBucketOrd) / counts.get(owningBucketOrd);
-            case sum_of_squares:
-                return sumOfSqrs.get(owningBucketOrd);
-            case variance:
-                return variance(owningBucketOrd);
-            case variance_population:
-                return variancePopulation(owningBucketOrd);
-            case variance_sampling:
-                return varianceSampling(owningBucketOrd);
-            case std_deviation:
-                return Math.sqrt(variance(owningBucketOrd));
-            case std_deviation_population:
-                return Math.sqrt(variance(owningBucketOrd));
-            case std_deviation_sampling:
-                return Math.sqrt(varianceSampling(owningBucketOrd));
-            case std_upper:
-                return (sums.get(owningBucketOrd) / counts.get(owningBucketOrd)) + (Math.sqrt(variance(owningBucketOrd)) * this.sigma);
-            case std_lower:
-                return (sums.get(owningBucketOrd) / counts.get(owningBucketOrd)) - (Math.sqrt(variance(owningBucketOrd)) * this.sigma);
-            default:
-                throw new IllegalArgumentException("Unknown value [" + name + "] in common stats aggregation");
-        }
+        return switch (InternalExtendedStats.Metrics.resolve(name)) {
+            case count -> counts.get(owningBucketOrd);
+            case sum -> sums.get(owningBucketOrd);
+            case min -> mins.get(owningBucketOrd);
+            case max -> maxes.get(owningBucketOrd);
+            case avg -> sums.get(owningBucketOrd) / counts.get(owningBucketOrd);
+            case sum_of_squares -> sumOfSqrs.get(owningBucketOrd);
+            case variance -> variance(owningBucketOrd);
+            case variance_population -> variancePopulation(owningBucketOrd);
+            case variance_sampling -> varianceSampling(owningBucketOrd);
+            case std_deviation, std_deviation_population, std_deviation_sampling -> Math.sqrt(variance(owningBucketOrd));
+            case std_upper -> (sums.get(owningBucketOrd) / counts.get(owningBucketOrd)) + (Math.sqrt(variance(owningBucketOrd))
+                * this.sigma);
+            case std_lower -> (sums.get(owningBucketOrd) / counts.get(owningBucketOrd)) - (Math.sqrt(variance(owningBucketOrd))
+                * this.sigma);
+            default -> throw new IllegalArgumentException("Unknown value [" + name + "] in common stats aggregation");
+        };
     }
 
     private double variance(long owningBucketOrd) {
@@ -236,7 +187,7 @@ class ExtendedStatsAggregator extends NumericMetricsAggregator.MultiValue {
 
     @Override
     public InternalAggregation buildAggregation(long bucket) {
-        if (valuesSource == null || bucket >= counts.size()) {
+        if (bucket >= counts.size()) {
             return buildEmptyAggregation();
         }
         return new InternalExtendedStats(
@@ -254,7 +205,7 @@ class ExtendedStatsAggregator extends NumericMetricsAggregator.MultiValue {
 
     @Override
     public InternalAggregation buildEmptyAggregation() {
-        return new InternalExtendedStats(name, 0, 0d, Double.POSITIVE_INFINITY, Double.NEGATIVE_INFINITY, 0d, sigma, format, metadata());
+        return InternalExtendedStats.empty(name, sigma, format, metadata());
     }
 
     @Override

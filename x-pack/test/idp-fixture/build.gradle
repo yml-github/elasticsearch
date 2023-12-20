@@ -1,42 +1,27 @@
-import org.elasticsearch.gradle.VersionProperties
-import org.elasticsearch.gradle.Architecture
-import static org.elasticsearch.gradle.internal.distribution.InternalElasticsearchDistributionTypes.DOCKER;
+apply plugin: 'elasticsearch.java'
+apply plugin: 'elasticsearch.cache-test-fixtures'
 
-apply plugin: 'elasticsearch.test.fixtures'
-apply plugin: 'elasticsearch.internal-distribution-download'
-
-tasks.register("copyKeystore", Sync) {
-  from project(':x-pack:plugin:core')
-    .file('src/test/resources/org/elasticsearch/xpack/security/transport/ssl/certs/simple/testnode.jks')
-  into "${buildDir}/certs"
-  doLast {
-    file("${buildDir}/certs").setReadable(true, false)
-    file("${buildDir}/certs/testnode.jks").setReadable(true, false)
-  }
+configurations.all {
+  transitive = false
 }
 
-elasticsearch_distributions {
-  docker {
-    type = DOCKER
-    architecture = Architecture.current()
-    version = VersionProperties.getElasticsearch()
-    failIfUnavailable = false // This ensures we skip this testing if Docker is unavailable
-  }
-}
+dependencies {
+  testImplementation project(':test:framework')
 
-tasks.named("preProcessFixture").configure {
-  dependsOn "copyKeystore", elasticsearch_distributions.docker
-  doLast {
-    File file = file("${testFixturesDir}/logs/node1")
-    file.mkdirs()
-    file.setWritable(true, false)
-  }
-}
+  api project(':test:fixtures:testcontainer-utils')
+  api "junit:junit:${versions.junit}"
+  api "org.testcontainers:testcontainers:${versions.testcontainer}"
+  implementation "com.carrotsearch.randomizedtesting:randomizedtesting-runner:${versions.randomizedrunner}"
+  implementation "org.slf4j:slf4j-api:${versions.slf4j}"
+  implementation "com.github.docker-java:docker-java-api:${versions.dockerJava}"
 
-tasks.named('composeUp').configure {
-  dependsOn "preProcessFixture"
-}
+  runtimeOnly "com.github.docker-java:docker-java-transport-zerodep:${versions.dockerJava}"
+  runtimeOnly "com.github.docker-java:docker-java-transport:${versions.dockerJava}"
+  runtimeOnly "com.github.docker-java:docker-java-core:${versions.dockerJava}"
+  runtimeOnly "org.apache.commons:commons-compress:${versions.commonsCompress}"
+  runtimeOnly "org.rnorth.duct-tape:duct-tape:${versions.ductTape}"
 
-tasks.named('composePull').configure {
-  enabled = false // this task fails due to docker-compose oddities
+  // ensure we have proper logging during when used in tests
+  runtimeOnly "org.slf4j:slf4j-simple:${versions.slf4j}"
+  runtimeOnly "org.hamcrest:hamcrest:${versions.hamcrest}"
 }

@@ -9,6 +9,9 @@
                /^$/
 ---
 "Test cat indices output":
+  - skip:
+      version: " - 8.10.99"
+      reason:  dataset size was added in 8.11.0
 
   - do:
       indices.create:
@@ -18,7 +21,8 @@
             number_of_shards: "1"
             number_of_replicas: "0"
   - do:
-      cat.indices: {}
+      cat.indices:
+        index: index1
 
   - match:
       $body: |
@@ -31,12 +35,27 @@
                   0      \s+
                   0      \s+
                   (\d+|\d+[.]\d+)(kb|b) \s+
+                  (\d+|\d+[.]\d+)(kb|b) \s+
                   (\d+|\d+[.]\d+)(kb|b) \s*
                 )
                 $/
 
   - do:
       cat.indices:
+        index: index1
+        v: false
+        h: [index, dataset.size]
+
+  - match:
+      $body: |
+               /^(index1 \s+
+                  (\d+|\d+[.]\d+)(kb|b) \s*
+                )
+                $/
+
+  - do:
+      cat.indices:
+        index: index1
         v: false
         h: i,cd,cds,creation.date,creation.date.string
   - match:
@@ -262,6 +281,7 @@
 
   - do:
       cat.indices:
+        index: b*,foo
         h: [status, index]
         s: [status, index]
 
@@ -274,6 +294,7 @@
 
   - do:
       cat.indices:
+        index: b*,foo
         h: [status, index]
         s: [status, "index:desc"]
 

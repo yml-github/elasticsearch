@@ -17,6 +17,7 @@ import org.elasticsearch.search.aggregations.InternalAggregation;
 import org.elasticsearch.search.aggregations.InternalAggregations;
 import org.elasticsearch.search.aggregations.InternalMultiBucketAggregation;
 import org.elasticsearch.search.aggregations.bucket.terms.heuristic.SignificanceHeuristic;
+import org.elasticsearch.search.aggregations.support.SamplingContext;
 import org.elasticsearch.xcontent.XContentBuilder;
 
 import java.io.IOException;
@@ -212,11 +213,7 @@ public abstract class InternalSignificantTerms<A extends InternalSignificantTerm
             @SuppressWarnings("unchecked")
             InternalSignificantTerms<A, B> terms = (InternalSignificantTerms<A, B>) aggregation;
             for (B bucket : terms.getBuckets()) {
-                List<B> existingBuckets = buckets.get(bucket.getKeyAsString());
-                if (existingBuckets == null) {
-                    existingBuckets = new ArrayList<>(aggregations.size());
-                    buckets.put(bucket.getKeyAsString(), existingBuckets);
-                }
+                List<B> existingBuckets = buckets.computeIfAbsent(bucket.getKeyAsString(), k -> new ArrayList<>(aggregations.size()));
                 // Adjust the buckets with the global stats representing the
                 // total size of the pots from which the stats are drawn
                 existingBuckets.add(
@@ -254,6 +251,28 @@ public abstract class InternalSignificantTerms<A extends InternalSignificantTerm
             list[i] = ordered.pop();
         }
         return create(globalSubsetSize, globalSupersetSize, Arrays.asList(list));
+    }
+
+    @Override
+    public InternalAggregation finalizeSampling(SamplingContext samplingContext) {
+        long supersetSize = samplingContext.scaleUp(getSupersetSize());
+        long subsetSize = samplingContext.scaleUp(getSubsetSize());
+        return create(
+            subsetSize,
+            supersetSize,
+            getBuckets().stream()
+                .map(
+                    b -> createBucket(
+                        samplingContext.scaleUp(b.subsetDf),
+                        subsetSize,
+                        samplingContext.scaleUp(b.supersetDf),
+                        supersetSize,
+                        InternalAggregations.finalizeSampling(b.aggregations, samplingContext),
+                        b
+                    )
+                )
+                .toList()
+        );
     }
 
     @Override

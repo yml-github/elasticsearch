@@ -8,7 +8,6 @@
 
 package org.elasticsearch.action.termvectors;
 
-import org.apache.logging.log4j.message.ParameterizedMessage;
 import org.elasticsearch.action.ActionType;
 import org.elasticsearch.action.support.ActionFilters;
 import org.elasticsearch.action.support.TransportActions;
@@ -26,6 +25,10 @@ import org.elasticsearch.index.termvectors.TermVectorsService;
 import org.elasticsearch.indices.IndicesService;
 import org.elasticsearch.threadpool.ThreadPool;
 import org.elasticsearch.transport.TransportService;
+
+import java.util.concurrent.Executor;
+
+import static org.elasticsearch.core.Strings.format;
 
 public class TransportShardMultiTermsVectorAction extends TransportSingleShardAction<
     MultiTermVectorsShardRequest,
@@ -53,7 +56,7 @@ public class TransportShardMultiTermsVectorAction extends TransportSingleShardAc
             actionFilters,
             indexNameExpressionResolver,
             MultiTermVectorsShardRequest::new,
-            ThreadPool.Names.GET
+            threadPool.executor(ThreadPool.Names.GET)
         );
         this.indicesService = indicesService;
     }
@@ -75,8 +78,9 @@ public class TransportShardMultiTermsVectorAction extends TransportSingleShardAc
 
     @Override
     protected ShardIterator shards(ClusterState state, InternalRequest request) {
-        return clusterService.operationRouting()
+        ShardIterator shards = clusterService.operationRouting()
             .getShards(state, request.concreteIndex(), request.request().shardId(), request.request().preference());
+        return clusterService.operationRouting().useOnlyPromotableShardsForStateless(shards);
     }
 
     @Override
@@ -93,14 +97,7 @@ public class TransportShardMultiTermsVectorAction extends TransportSingleShardAc
                 if (TransportActions.isShardNotAvailableException(e)) {
                     throw e;
                 } else {
-                    logger.debug(
-                        () -> new ParameterizedMessage(
-                            "{} failed to execute multi term vectors for [{}]",
-                            shardId,
-                            termVectorsRequest.id()
-                        ),
-                        e
-                    );
+                    logger.debug(() -> format("%s failed to execute multi term vectors for [%s]", shardId, termVectorsRequest.id()), e);
                     response.add(
                         request.locations.get(i),
                         new MultiTermVectorsResponse.Failure(request.index(), termVectorsRequest.id(), e)
@@ -113,10 +110,10 @@ public class TransportShardMultiTermsVectorAction extends TransportSingleShardAc
     }
 
     @Override
-    protected String getExecutor(MultiTermVectorsShardRequest request, ShardId shardId) {
+    protected Executor getExecutor(MultiTermVectorsShardRequest request, ShardId shardId) {
         IndexService indexService = indicesService.indexServiceSafe(shardId.getIndex());
         return indexService.getIndexSettings().isSearchThrottled()
-            ? ThreadPool.Names.SEARCH_THROTTLED
+            ? threadPool.executor(ThreadPool.Names.SEARCH_THROTTLED)
             : super.getExecutor(request, shardId);
     }
 }

@@ -10,12 +10,12 @@ import org.apache.http.util.EntityUtils;
 import org.elasticsearch.client.Request;
 import org.elasticsearch.client.Response;
 import org.elasticsearch.client.ResponseException;
-import org.elasticsearch.client.ml.GetTrainedModelsStatsResponse;
-import org.elasticsearch.client.ml.inference.TrainedModelStats;
 import org.elasticsearch.common.bytes.BytesReference;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.util.concurrent.ThreadContext;
 import org.elasticsearch.common.xcontent.XContentHelper;
+import org.elasticsearch.common.xcontent.support.XContentMapValues;
+import org.elasticsearch.core.Strings;
 import org.elasticsearch.index.query.QueryBuilder;
 import org.elasticsearch.index.query.QueryBuilders;
 import org.elasticsearch.test.ExternalTestCluster;
@@ -24,9 +24,7 @@ import org.elasticsearch.test.rest.ESRestTestCase;
 import org.elasticsearch.xcontent.NamedXContentRegistry;
 import org.elasticsearch.xcontent.XContentBuilder;
 import org.elasticsearch.xcontent.XContentFactory;
-import org.elasticsearch.xcontent.XContentParser;
 import org.elasticsearch.xcontent.XContentType;
-import org.elasticsearch.xcontent.json.JsonXContent;
 import org.elasticsearch.xpack.core.ml.inference.MlInferenceNamedXContentProvider;
 import org.elasticsearch.xpack.core.ml.inference.trainedmodel.inference.InferenceDefinitionTests;
 import org.elasticsearch.xpack.core.ml.integration.MlRestTestStateCleaner;
@@ -36,6 +34,7 @@ import org.junit.Before;
 
 import java.io.IOException;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
@@ -124,8 +123,8 @@ public class InferenceIngestIT extends ESRestTestCase {
         assertThat(EntityUtils.toString(searchResponse.getEntity()), containsString("\"value\":10"));
         assertBusy(() -> {
             try {
-                assertStatsWithCacheMisses(classificationModelId, 10L);
-                assertStatsWithCacheMisses(regressionModelId, 10L);
+                assertStatsWithCacheMisses(classificationModelId, 10);
+                assertStatsWithCacheMisses(regressionModelId, 10);
             } catch (ResponseException ex) {
                 // this could just mean shard failures.
                 fail(ex.getMessage());
@@ -176,8 +175,8 @@ public class InferenceIngestIT extends ESRestTestCase {
 
         assertBusy(() -> {
             try {
-                assertStatsWithCacheMisses(classificationModelId, 10L);
-                assertStatsWithCacheMisses(regressionModelId, 15L);
+                assertStatsWithCacheMisses(classificationModelId, 10);
+                assertStatsWithCacheMisses(regressionModelId, 15);
             } catch (ResponseException ex) {
                 // this could just mean shard failures.
                 fail(ex.getMessage());
@@ -185,6 +184,7 @@ public class InferenceIngestIT extends ESRestTestCase {
         }, 30, TimeUnit.SECONDS);
     }
 
+    @SuppressWarnings("unchecked")
     public void testPipelineIngestWithModelAliases() throws Exception {
         String regressionModelId = "test_regression_1";
         putModel(regressionModelId, REGRESSION_CONFIG);
@@ -255,17 +255,13 @@ public class InferenceIngestIT extends ESRestTestCase {
         assertThat(EntityUtils.toString(searchResponse.getEntity()), not(containsString("\"value\":0")));
 
         assertBusy(() -> {
-            try (
-                XContentParser parser = createParser(
-                    JsonXContent.jsonXContent,
-                    client().performRequest(new Request("GET", "_ml/trained_models/" + modelAlias + "/_stats")).getEntity().getContent()
-                )
-            ) {
-                GetTrainedModelsStatsResponse response = GetTrainedModelsStatsResponse.fromXContent(parser);
-                assertThat(response.toString(), response.getTrainedModelStats(), hasSize(1));
-                TrainedModelStats trainedModelStats = response.getTrainedModelStats().get(0);
-                assertThat(trainedModelStats.getModelId(), equalTo(regressionModelId2));
-                assertThat(trainedModelStats.getInferenceStats(), is(notNullValue()));
+            try {
+                Response response = client().performRequest(new Request("GET", "_ml/trained_models/" + modelAlias + "/_stats"));
+                var responseMap = entityAsMap(response);
+                assertThat((List<?>) responseMap.get("trained_model_stats"), hasSize(1));
+                var stats = ((List<Map<String, Object>>) responseMap.get("trained_model_stats")).get(0);
+                assertThat(stats.get("model_id"), equalTo(regressionModelId2));
+                assertThat(stats.get("inference_stats"), is(notNullValue()));
             } catch (ResponseException ex) {
                 // this could just mean shard failures.
                 fail(ex.getMessage());
@@ -273,16 +269,19 @@ public class InferenceIngestIT extends ESRestTestCase {
         });
     }
 
-    public void assertStatsWithCacheMisses(String modelId, long inferenceCount) throws IOException {
+    @SuppressWarnings("unchecked")
+    public void assertStatsWithCacheMisses(String modelId, int inferenceCount) throws IOException {
         Response statsResponse = client().performRequest(new Request("GET", "_ml/trained_models/" + modelId + "/_stats"));
-        try (XContentParser parser = createParser(JsonXContent.jsonXContent, statsResponse.getEntity().getContent())) {
-            GetTrainedModelsStatsResponse response = GetTrainedModelsStatsResponse.fromXContent(parser);
-            assertThat(response.getTrainedModelStats(), hasSize(1));
-            TrainedModelStats trainedModelStats = response.getTrainedModelStats().get(0);
-            assertThat(trainedModelStats.getInferenceStats(), is(notNullValue()));
-            assertThat(trainedModelStats.getInferenceStats().getInferenceCount(), equalTo(inferenceCount));
-            assertThat(trainedModelStats.getInferenceStats().getCacheMissCount(), greaterThan(0L));
-        }
+        var responseMap = entityAsMap(statsResponse);
+        assertThat((List<?>) responseMap.get("trained_model_stats"), hasSize(1));
+        var stats = ((List<Map<String, Object>>) responseMap.get("trained_model_stats")).get(0);
+        assertThat(stats.get("inference_stats"), is(notNullValue()));
+        assertThat(
+            stats.toString(),
+            (Integer) XContentMapValues.extractValue("inference_stats.inference_count", stats),
+            equalTo(inferenceCount)
+        );
+        assertThat(stats.toString(), (Integer) XContentMapValues.extractValue("inference_stats.cache_miss_count", stats), greaterThan(0));
     }
 
     public void testSimulate() throws IOException {
@@ -292,7 +291,7 @@ public class InferenceIngestIT extends ESRestTestCase {
         String regressionModelId = "test_regression_simulate";
         putModel(regressionModelId, REGRESSION_CONFIG);
 
-        String source = """
+        String source = Strings.format("""
             {
               "pipeline": {
                 "processors": [
@@ -343,7 +342,7 @@ public class InferenceIngestIT extends ESRestTestCase {
                 }
               ]
             }
-            """.formatted(classificationModelId, regressionModelId);
+            """, classificationModelId, regressionModelId);
 
         Response response = client().performRequest(simulateRequest(source));
         String responseString = EntityUtils.toString(response.getEntity());
@@ -392,7 +391,7 @@ public class InferenceIngestIT extends ESRestTestCase {
     public void testSimulateWithDefaultMappedField() throws IOException {
         String classificationModelId = "test_classification_default_mapped_field";
         putModel(classificationModelId, CLASSIFICATION_CONFIG);
-        String source = """
+        String source = Strings.format("""
             {
               "pipeline": {
                 "processors": [
@@ -422,7 +421,7 @@ public class InferenceIngestIT extends ESRestTestCase {
                   }
                 }
               ]
-            }""".formatted(classificationModelId);
+            }""", classificationModelId);
 
         Response response = client().performRequest(simulateRequest(source));
         String responseString = EntityUtils.toString(response.getEntity());
@@ -676,7 +675,7 @@ public class InferenceIngestIT extends ESRestTestCase {
           }
         }""";
 
-    private static final String REGRESSION_CONFIG = """
+    private static final String REGRESSION_CONFIG = Strings.format("""
         {
             "input": {
                 "field_names": [
@@ -691,14 +690,14 @@ public class InferenceIngestIT extends ESRestTestCase {
                 "regression": {}
             },
             "definition": %s
-        }""".formatted(REGRESSION_DEFINITION);
+        }""", REGRESSION_DEFINITION);
 
     @Override
     protected NamedXContentRegistry xContentRegistry() {
         return new NamedXContentRegistry(new MlInferenceNamedXContentProvider().getNamedXContentParsers());
     }
 
-    private static final String CLASSIFICATION_CONFIG = """
+    private static final String CLASSIFICATION_CONFIG = Strings.format("""
         {
           "input": {
             "field_names": [ "col1", "col2", "col3", "col4" ]
@@ -711,10 +710,10 @@ public class InferenceIngestIT extends ESRestTestCase {
             "classification": {}
           },
           "definition": %s
-        }""".formatted(InferenceDefinitionTests.getClassificationDefinition(false));
+        }""", InferenceDefinitionTests.getClassificationDefinition(false));
 
     private static String pipelineDefinition(String modelId, String inferenceConfig) {
-        return """
+        return Strings.format("""
             {
               "processors": [
                 {
@@ -733,7 +732,7 @@ public class InferenceIngestIT extends ESRestTestCase {
                   }
                 }
               ]
-            }""".formatted(modelId, inferenceConfig, inferenceConfig);
+            }""", modelId, inferenceConfig, inferenceConfig);
     }
 
     private void putModel(String modelId, String modelConfiguration) throws IOException {

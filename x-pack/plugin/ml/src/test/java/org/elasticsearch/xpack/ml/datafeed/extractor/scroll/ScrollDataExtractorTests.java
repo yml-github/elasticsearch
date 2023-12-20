@@ -9,7 +9,6 @@ package org.elasticsearch.xpack.ml.datafeed.extractor.scroll;
 import org.apache.lucene.search.TotalHits;
 import org.elasticsearch.ElasticsearchException;
 import org.elasticsearch.action.ActionFuture;
-import org.elasticsearch.action.search.ClearScrollAction;
 import org.elasticsearch.action.search.ClearScrollRequest;
 import org.elasticsearch.action.search.ClearScrollResponse;
 import org.elasticsearch.action.search.SearchPhaseExecutionException;
@@ -17,6 +16,7 @@ import org.elasticsearch.action.search.SearchRequest;
 import org.elasticsearch.action.search.SearchRequestBuilder;
 import org.elasticsearch.action.search.SearchResponse;
 import org.elasticsearch.action.search.ShardSearchFailure;
+import org.elasticsearch.action.search.TransportClearScrollAction;
 import org.elasticsearch.client.internal.Client;
 import org.elasticsearch.common.document.DocumentField;
 import org.elasticsearch.common.settings.Settings;
@@ -35,6 +35,8 @@ import org.elasticsearch.search.builder.SearchSourceBuilder;
 import org.elasticsearch.test.ESTestCase;
 import org.elasticsearch.threadpool.ThreadPool;
 import org.elasticsearch.xpack.core.ml.datafeed.DatafeedTimingStats;
+import org.elasticsearch.xpack.core.ml.datafeed.SearchInterval;
+import org.elasticsearch.xpack.core.ml.datafeed.extractor.DataExtractor;
 import org.elasticsearch.xpack.ml.datafeed.DatafeedTimingStatsReporter;
 import org.elasticsearch.xpack.ml.datafeed.DatafeedTimingStatsReporter.DatafeedTimingStatsPersister;
 import org.elasticsearch.xpack.ml.extractor.DocValueField;
@@ -171,7 +173,7 @@ public class ScrollDataExtractorTests extends ESTestCase {
 
         clearScrollFuture = mock(ActionFuture.class);
         capturedClearScrollRequests = ArgumentCaptor.forClass(ClearScrollRequest.class);
-        when(client.execute(same(ClearScrollAction.INSTANCE), capturedClearScrollRequests.capture())).thenReturn(clearScrollFuture);
+        when(client.execute(same(TransportClearScrollAction.TYPE), capturedClearScrollRequests.capture())).thenReturn(clearScrollFuture);
         timingStatsReporter = new DatafeedTimingStatsReporter(new DatafeedTimingStats(jobId), mock(DatafeedTimingStatsPersister.class));
     }
 
@@ -182,7 +184,9 @@ public class ScrollDataExtractorTests extends ESTestCase {
         extractor.setNextResponse(response1);
 
         assertThat(extractor.hasNext(), is(true));
-        Optional<InputStream> stream = extractor.next();
+        DataExtractor.Result result = extractor.next();
+        assertThat(result.searchInterval(), equalTo(new SearchInterval(1000L, 2000L)));
+        Optional<InputStream> stream = result.data();
         assertThat(stream.isPresent(), is(true));
         String expectedStream = "{\"time\":1100,\"field_1\":\"a1\"} {\"time\":1200,\"field_1\":\"a2\"}";
         assertThat(asString(stream.get()), equalTo(expectedStream));
@@ -190,7 +194,7 @@ public class ScrollDataExtractorTests extends ESTestCase {
         SearchResponse response2 = createEmptySearchResponse();
         extractor.setNextResponse(response2);
         assertThat(extractor.hasNext(), is(true));
-        assertThat(extractor.next().isPresent(), is(false));
+        assertThat(extractor.next().data().isPresent(), is(false));
         assertThat(extractor.hasNext(), is(false));
         assertThat(capturedSearchRequests.size(), equalTo(1));
 
@@ -222,7 +226,9 @@ public class ScrollDataExtractorTests extends ESTestCase {
         extractor.setNextResponse(response1);
 
         assertThat(extractor.hasNext(), is(true));
-        Optional<InputStream> stream = extractor.next();
+        DataExtractor.Result result = extractor.next();
+        assertThat(result.searchInterval(), equalTo(new SearchInterval(1000L, 10000L)));
+        Optional<InputStream> stream = result.data();
         assertThat(stream.isPresent(), is(true));
         String expectedStream = """
             {"time":1000,"field_1":"a1"} {"time":2000,"field_1":"a2"}""";
@@ -232,7 +238,9 @@ public class ScrollDataExtractorTests extends ESTestCase {
         extractor.setNextResponse(response2);
 
         assertThat(extractor.hasNext(), is(true));
-        stream = extractor.next();
+        result = extractor.next();
+        assertThat(result.searchInterval(), equalTo(new SearchInterval(1000L, 10000L)));
+        stream = result.data();
         assertThat(stream.isPresent(), is(true));
         expectedStream = """
             {"time":3000,"field_1":"a3"} {"time":4000,"field_1":"a4"}""";
@@ -241,7 +249,7 @@ public class ScrollDataExtractorTests extends ESTestCase {
         SearchResponse response3 = createEmptySearchResponse();
         extractor.setNextResponse(response3);
         assertThat(extractor.hasNext(), is(true));
-        assertThat(extractor.next().isPresent(), is(false));
+        assertThat(extractor.next().data().isPresent(), is(false));
         assertThat(extractor.hasNext(), is(false));
         assertThat(capturedSearchRequests.size(), equalTo(1));
 
@@ -273,7 +281,7 @@ public class ScrollDataExtractorTests extends ESTestCase {
         extractor.setNextResponse(response1);
 
         assertThat(extractor.hasNext(), is(true));
-        Optional<InputStream> stream = extractor.next();
+        Optional<InputStream> stream = extractor.next().data();
         assertThat(stream.isPresent(), is(true));
         String expectedStream = """
             {"time":1000,"field_1":"a1"} {"time":2000,"field_1":"a2"}""";
@@ -290,7 +298,7 @@ public class ScrollDataExtractorTests extends ESTestCase {
 
         assertThat(extractor.isCancelled(), is(true));
         assertThat(extractor.hasNext(), is(true));
-        stream = extractor.next();
+        stream = extractor.next().data();
         assertThat(stream.isPresent(), is(true));
         expectedStream = """
             {"time":2000,"field_1":"a3"} {"time":2000,"field_1":"a4"}""";
@@ -318,7 +326,7 @@ public class ScrollDataExtractorTests extends ESTestCase {
         extractor.setNextResponse(response1);
 
         assertThat(extractor.hasNext(), is(true));
-        Optional<InputStream> stream = extractor.next();
+        Optional<InputStream> stream = extractor.next().data();
         assertThat(stream.isPresent(), is(true));
 
         extractor.setNextResponseToError(new SearchPhaseExecutionException("search phase 1", "boom", ShardSearchFailure.EMPTY_ARRAY));
@@ -348,16 +356,18 @@ public class ScrollDataExtractorTests extends ESTestCase {
         );
         extractor.setNextResponse(goodResponse);
         extractor.setNextResponseToError(new SearchPhaseExecutionException("search phase 1", "boom", ShardSearchFailure.EMPTY_ARRAY));
+        // goodResponse needs to be recreated because previous response is consumed (deleted/modified) while processing the response.
+        goodResponse = createSearchResponse(Arrays.asList(1100L, 1200L), Arrays.asList("a1", "a2"), Arrays.asList("b1", "b2"));
         extractor.setNextResponse(goodResponse);
         extractor.setNextResponseToError(new SearchPhaseExecutionException("search phase 1", "boom", ShardSearchFailure.EMPTY_ARRAY));
 
         // first response is good
         assertThat(extractor.hasNext(), is(true));
-        Optional<InputStream> output = extractor.next();
+        Optional<InputStream> output = extractor.next().data();
         assertThat(output.isPresent(), is(true));
         // this should recover from the first shard failure and try again
         assertThat(extractor.hasNext(), is(true));
-        output = extractor.next();
+        output = extractor.next().data();
         assertThat(output.isPresent(), is(true));
         // A second failure is not tolerated
         assertThat(extractor.hasNext(), is(true));
@@ -379,7 +389,7 @@ public class ScrollDataExtractorTests extends ESTestCase {
         extractor.setNextResponseToError(new ElasticsearchException("something not search phase exception"));
         extractor.setNextResponseToError(new ElasticsearchException("something not search phase exception"));
 
-        Optional<InputStream> output = extractor.next();
+        Optional<InputStream> output = extractor.next().data();
         assertThat(output.isPresent(), is(true));
         assertEquals(1000L, extractor.getInitScrollStartTime());
 
@@ -409,11 +419,11 @@ public class ScrollDataExtractorTests extends ESTestCase {
 
         // first response is good
         assertThat(extractor.hasNext(), is(true));
-        Optional<InputStream> output = extractor.next();
+        Optional<InputStream> output = extractor.next().data();
         assertThat(output.isPresent(), is(true));
         // this should recover from the SearchPhaseExecutionException and try again
         assertThat(extractor.hasNext(), is(true));
-        output = extractor.next();
+        output = extractor.next().data();
         assertThat(output.isPresent(), is(true));
         assertEquals(Long.valueOf(1400L), extractor.getLastTimestamp());
         // A second failure is not tolerated
@@ -464,7 +474,7 @@ public class ScrollDataExtractorTests extends ESTestCase {
         extractor.setNextResponse(response1);
 
         assertThat(extractor.hasNext(), is(true));
-        Optional<InputStream> stream = extractor.next();
+        Optional<InputStream> stream = extractor.next().data();
         assertThat(stream.isPresent(), is(true));
         String expectedStream = """
             {"time":1100,"field_1":"a1"} {"time":1200,"field_1":"a2"}""";
@@ -473,7 +483,7 @@ public class ScrollDataExtractorTests extends ESTestCase {
         SearchResponse response2 = createEmptySearchResponse();
         extractor.setNextResponse(response2);
         assertThat(extractor.hasNext(), is(true));
-        assertThat(extractor.next().isPresent(), is(false));
+        assertThat(extractor.next().data().isPresent(), is(false));
         assertThat(extractor.hasNext(), is(false));
         assertThat(capturedSearchRequests.size(), equalTo(1));
 
@@ -532,7 +542,8 @@ public class ScrollDataExtractorTests extends ESTestCase {
             fields.put(extractedFields.timeField(), new DocumentField("time", Collections.singletonList(timestamps.get(i))));
             fields.put("field_1", new DocumentField("field_1", Collections.singletonList(field1Values.get(i))));
             fields.put("field_2", new DocumentField("field_2", Collections.singletonList(field2Values.get(i))));
-            SearchHit hit = new SearchHit(randomInt(), null, fields, null);
+            SearchHit hit = new SearchHit(randomInt(), null);
+            hit.addDocumentFields(fields, Map.of());
             hits.add(hit);
         }
         SearchHits searchHits = new SearchHits(hits.toArray(new SearchHit[0]), new TotalHits(hits.size(), TotalHits.Relation.EQUAL_TO), 1);

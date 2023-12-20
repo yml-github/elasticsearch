@@ -43,6 +43,7 @@ import static org.hamcrest.Matchers.not;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.argThat;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.same;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
@@ -292,10 +293,7 @@ public final class RemoteClusterLicenseCheckerTests extends ESTestCase {
             final RemoteClusterLicenseChecker licenseChecker = new RemoteClusterLicenseChecker(client, feature);
 
             final List<String> remoteClusterAliases = Collections.singletonList("valid");
-            licenseChecker.checkRemoteClusterLicenses(
-                remoteClusterAliases,
-                doubleInvocationProtectingListener(ActionListener.wrap(() -> {}))
-            );
+            licenseChecker.checkRemoteClusterLicenses(remoteClusterAliases, doubleInvocationProtectingListener(ActionListener.noop()));
 
             verify(client, times(1)).execute(same(XPackInfoAction.INSTANCE), any(), any());
         } finally {
@@ -472,13 +470,13 @@ public final class RemoteClusterLicenseCheckerTests extends ESTestCase {
     }
 
     private Client createMockClient(final ThreadPool threadPool) {
-        return createMockClient(threadPool, client -> when(client.getRemoteClusterClient(anyString())).thenReturn(client));
+        return createMockClient(threadPool, client -> when(client.getRemoteClusterClient(anyString(), any())).thenReturn(client));
     }
 
     private Client createMockClientThatThrowsOnGetRemoteClusterClient(final ThreadPool threadPool, final String clusterAlias) {
         return createMockClient(threadPool, client -> {
-            when(client.getRemoteClusterClient(clusterAlias)).thenThrow(new IllegalArgumentException());
-            when(client.getRemoteClusterClient(argThat(a -> not(clusterAlias).matches(a)))).thenReturn(client);
+            when(client.getRemoteClusterClient(eq(clusterAlias), any())).thenThrow(new IllegalArgumentException());
+            when(client.getRemoteClusterClient(argThat(a -> not(clusterAlias).matches(a)), any())).thenReturn(client);
         });
     }
 

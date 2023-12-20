@@ -29,7 +29,7 @@ PUT /index_4
 
 PUT _snapshot/my_repository/snapshot_2?wait_for_completion=true
 {
-  "indices": "index_3,index_4",
+  "indices": "index_1,index_2",
   "ignore_unavailable": true,
   "include_global_state": false,
   "metadata": {
@@ -159,6 +159,7 @@ The cluster state includes:
 * <<indices-templates-v1,Legacy index templates>>
 * <<ingest,Ingest pipelines>>
 * <<index-lifecycle-management,{ilm-init} policies>>
+* <<script-stored-scripts,Stored scripts>>
 * For snapshots taken after 7.12.0, <<feature-state,feature states>>
 // end::cluster-state-contents[]
 
@@ -170,6 +171,9 @@ ingest pipelines and {ilm-init} lifecycle policies that exist in your cluster
 and replaces them with the corresponding items from the snapshot.
 
 Use the `feature_states` parameter to configure how feature states are restored.
+
+If `include_global_state` is `true` and a snapshot was created without a global
+state then the restore request will fail.
 --
 
 [[restore-snapshot-api-feature-states]]
@@ -179,8 +183,10 @@ Use the `feature_states` parameter to configure how feature states are restored.
 +
 If `include_global_state` is `true`, the request restores all feature states
 in the snapshot by default. If `include_global_state` is `false`, the request
-restores no feature states by default. To restore no feature states, regardless
-of the `include_global_state` value, specify an empty array (`[]`).
+restores no feature states by default. Note that specifying an empty array
+will result in the default behavior. To restore no feature states, regardless
+of the `include_global_state` value, specify an array containing only the value
+`none` (`["none"]`).
 
 [[restore-snapshot-api-index-settings]]
 `index_settings`::
@@ -225,6 +231,9 @@ Defines the rename replacement string. See <<restore-snapshot-api-rename-pattern
 [[restore-snapshot-api-example]]
 ==== {api-examples-title}
 
+[[restore-snapshot-api-example-rename]]
+===== Restore renamed
+
 The following request restores `index_1` and `index_2` from `snapshot_2`. The `rename_pattern` and `rename_replacement` parameters indicate any index matching the regular expression `index_(.+)` will be renamed using the pattern `restored_index_$1` when restored.
 
 For example, `index_1` will be renamed to `restored_index_1`. `index_2` will be renamed to `restored_index_2`.
@@ -244,3 +253,23 @@ POST /_snapshot/my_repository/snapshot_2/_restore?wait_for_completion=true
 
 The API returns an acknowledgement if the request succeeds. If the request encounters errors, the response indicates any issues found, such as
 open indices that are blocking the restore operation from completing.
+
+[[restore-snapshot-api-example-inplace]]
+===== Restore in-place
+
+You may want to restore an index in-place, for example when no alternative
+options surface after the <<cluster-allocation-explain>> API reports
+`no_valid_shard_copy`.
+
+The following request <<indices-close,closes>> `index_1` and then restores it
+in-place from the `snapshot_2` snapshot in the `my_repository` repository.
+
+[source,console]
+----
+POST index_1/_close
+
+POST /_snapshot/my_repository/snapshot_2/_restore?wait_for_completion=true
+{
+  "indices": "index_1"
+}
+----

@@ -18,21 +18,18 @@ public class MapperBuilderContext {
     /**
      * The root context, to be used when building a tree of mappers
      */
-    public static final MapperBuilderContext ROOT = new MapperBuilderContext(null);
-
-    // TODO remove this
-    public static MapperBuilderContext forPath(ContentPath path) {
-        String p = path.pathAsText("");
-        if (p.endsWith(".")) {
-            p = p.substring(0, p.length() - 1);
-        }
-        return new MapperBuilderContext(p);
+    public static MapperBuilderContext root(boolean isSourceSynthetic, boolean isDataStream) {
+        return new MapperBuilderContext(null, isSourceSynthetic, isDataStream);
     }
 
     private final String path;
+    private final boolean isSourceSynthetic;
+    private final boolean isDataStream;
 
-    private MapperBuilderContext(String path) {
+    MapperBuilderContext(String path, boolean isSourceSynthetic, boolean isDataStream) {
         this.path = path;
+        this.isSourceSynthetic = isSourceSynthetic;
+        this.isDataStream = isDataStream;
     }
 
     /**
@@ -41,16 +38,30 @@ public class MapperBuilderContext {
      * @return a new MapperBuilderContext with this context as its parent
      */
     public MapperBuilderContext createChildContext(String name) {
-        return new MapperBuilderContext(buildFullName(name));
+        return new MapperBuilderContext(buildFullName(name), isSourceSynthetic, isDataStream);
     }
 
     /**
      * Builds the full name of the field, taking into account parent objects
      */
-    public final String buildFullName(String name) {
+    public String buildFullName(String name) {
         if (Strings.isEmpty(path)) {
             return name;
         }
         return path + "." + name;
+    }
+
+    /**
+     * Is the {@code _source} field being reconstructed on the fly?
+     */
+    public boolean isSourceSynthetic() {
+        return isSourceSynthetic;
+    }
+
+    /**
+     * Are these mappings being built for a data stream index?
+     */
+    public boolean isDataStream() {
+        return isDataStream;
     }
 }

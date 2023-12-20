@@ -18,7 +18,7 @@ dependencies {
   testImplementation project(':client:rest-high-level')
 }
 
-BuildParams.bwcVersions.withWireCompatiple { bwcVersion, baseName ->
+BuildParams.bwcVersions.withWireCompatible { bwcVersion, baseName ->
 
   /**
    * We execute tests 3 times.
@@ -51,13 +51,21 @@ BuildParams.bwcVersions.withWireCompatiple { bwcVersion, baseName ->
       nonInputProperties.systemProperty('tests.rest.cluster', localCluster.map(c -> c.allHttpSocketURI.join(",")))
       nonInputProperties.systemProperty('tests.rest.remote_cluster', remoteCluster.map(c -> c.allHttpSocketURI.join(",")))
     }
+
+    onlyIf("FIPS mode disabled") { BuildParams.inFipsJvm == false }
   }
 
-  tasks.register("${baseName}#oneThirdUpgraded", StandaloneRestIntegTestTask) {
+  tasks.register("${baseName}#oldClusterTest", StandaloneRestIntegTestTask) {
     dependsOn "processTestResources"
     mustRunAfter("precommit")
     doFirst {
       localCluster.get().nextNodeToNextVersion()
+    }
+  }
+
+  tasks.register("${baseName}#oneThirdUpgraded", StandaloneRestIntegTestTask) {
+    dependsOn "${baseName}#oldClusterTest"
+    doFirst {
       remoteCluster.get().nextNodeToNextVersion()
     }
   }

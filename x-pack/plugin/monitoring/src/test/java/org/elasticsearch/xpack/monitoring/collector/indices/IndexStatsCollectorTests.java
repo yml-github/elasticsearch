@@ -9,7 +9,6 @@ package org.elasticsearch.xpack.monitoring.collector.indices;
 import org.elasticsearch.ElasticsearchTimeoutException;
 import org.elasticsearch.action.FailedNodeException;
 import org.elasticsearch.action.admin.indices.stats.IndexStats;
-import org.elasticsearch.action.admin.indices.stats.IndicesStatsAction;
 import org.elasticsearch.action.admin.indices.stats.IndicesStatsRequestBuilder;
 import org.elasticsearch.action.admin.indices.stats.IndicesStatsResponse;
 import org.elasticsearch.action.support.DefaultShardOperationFailedException;
@@ -20,13 +19,13 @@ import org.elasticsearch.client.internal.IndicesAdminClient;
 import org.elasticsearch.cluster.metadata.IndexMetadata;
 import org.elasticsearch.cluster.routing.IndexRoutingTable;
 import org.elasticsearch.cluster.routing.RoutingTable;
+import org.elasticsearch.common.util.Maps;
 import org.elasticsearch.core.TimeValue;
 import org.elasticsearch.xpack.core.monitoring.MonitoredSystem;
 import org.elasticsearch.xpack.core.monitoring.exporter.MonitoringDoc;
 import org.elasticsearch.xpack.monitoring.BaseCollectorTestCase;
 
 import java.util.Collection;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -85,9 +84,9 @@ public class IndexStatsCollectorTests extends BaseCollectorTestCase {
         // Total number of indices
         final int indices = existingIndices + createdIndices + deletedIndices;
 
-        final Map<String, IndexStats> indicesStats = new HashMap<>(indices);
-        final Map<String, IndexMetadata> indicesMetadata = new HashMap<>(indices);
-        final Map<String, IndexRoutingTable> indicesRoutingTable = new HashMap<>(indices);
+        final Map<String, IndexStats> indicesStats = Maps.newMapWithExpectedSize(indices);
+        final Map<String, IndexMetadata> indicesMetadata = Maps.newMapWithExpectedSize(indices);
+        final Map<String, IndexRoutingTable> indicesRoutingTable = Maps.newMapWithExpectedSize(indices);
 
         for (int i = 0; i < indices; i++) {
             final String index = "_index_" + i;
@@ -117,9 +116,7 @@ public class IndexStatsCollectorTests extends BaseCollectorTestCase {
         final String[] indexNames = indicesMetadata.keySet().toArray(new String[0]);
         when(metadata.getConcreteAllIndices()).thenReturn(indexNames);
 
-        final IndicesStatsRequestBuilder indicesStatsRequestBuilder = spy(
-            new IndicesStatsRequestBuilder(mock(ElasticsearchClient.class), IndicesStatsAction.INSTANCE)
-        );
+        final IndicesStatsRequestBuilder indicesStatsRequestBuilder = spy(new IndicesStatsRequestBuilder(mock(ElasticsearchClient.class)));
         doReturn(indicesStatsResponse).when(indicesStatsRequestBuilder).get();
 
         final IndicesAdminClient indicesAdminClient = mock(IndicesAdminClient.class);
@@ -174,7 +171,7 @@ public class IndexStatsCollectorTests extends BaseCollectorTestCase {
 
         assertWarnings(
             "[xpack.monitoring.collection.index.stats.timeout] setting was deprecated in Elasticsearch and will be removed "
-                + "in a future release! See the breaking changes documentation for the next major version."
+                + "in a future release."
         );
     }
 
@@ -196,9 +193,7 @@ public class IndexStatsCollectorTests extends BaseCollectorTestCase {
                 ) }
         );
 
-        final IndicesStatsRequestBuilder indicesStatsRequestBuilder = spy(
-            new IndicesStatsRequestBuilder(mock(ElasticsearchClient.class), IndicesStatsAction.INSTANCE)
-        );
+        final IndicesStatsRequestBuilder indicesStatsRequestBuilder = spy(new IndicesStatsRequestBuilder(mock(ElasticsearchClient.class)));
         doReturn(indicesStatsResponse).when(indicesStatsRequestBuilder).get();
 
         final IndicesAdminClient indicesAdminClient = mock(IndicesAdminClient.class);
@@ -217,7 +212,7 @@ public class IndexStatsCollectorTests extends BaseCollectorTestCase {
 
         assertWarnings(
             "[xpack.monitoring.collection.index.stats.timeout] setting was deprecated in Elasticsearch and will be removed "
-                + "in a future release! See the breaking changes documentation for the next major version."
+                + "in a future release."
         );
     }
 

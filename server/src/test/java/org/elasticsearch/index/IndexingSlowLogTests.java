@@ -8,15 +8,12 @@
 
 package org.elasticsearch.index;
 
-import com.fasterxml.jackson.core.JsonParseException;
-
 import org.apache.logging.log4j.Level;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.apache.logging.log4j.core.LoggerContext;
 import org.apache.lucene.document.NumericDocValuesField;
 import org.apache.lucene.index.Term;
-import org.elasticsearch.Version;
 import org.elasticsearch.cluster.metadata.IndexMetadata;
 import org.elasticsearch.common.UUIDs;
 import org.elasticsearch.common.bytes.BytesArray;
@@ -28,12 +25,13 @@ import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.core.TimeValue;
 import org.elasticsearch.index.IndexingSlowLog.IndexingSlowLogMessage;
 import org.elasticsearch.index.engine.Engine;
-import org.elasticsearch.index.engine.InternalEngineTests;
+import org.elasticsearch.index.engine.EngineTestCase;
 import org.elasticsearch.index.mapper.ParsedDocument;
 import org.elasticsearch.index.mapper.SeqNoFieldMapper;
 import org.elasticsearch.index.mapper.Uid;
 import org.elasticsearch.index.shard.ShardId;
 import org.elasticsearch.test.ESTestCase;
+import org.elasticsearch.xcontent.XContentParseException;
 import org.elasticsearch.xcontent.XContentType;
 import org.elasticsearch.xcontent.json.JsonXContent;
 import org.junit.AfterClass;
@@ -41,7 +39,6 @@ import org.junit.BeforeClass;
 import org.mockito.Mockito;
 
 import java.io.IOException;
-import java.io.UncheckedIOException;
 
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.emptyOrNullString;
@@ -76,7 +73,7 @@ public class IndexingSlowLogTests extends ESTestCase {
         IndexSettings settings = new IndexSettings(metadata, Settings.EMPTY);
         IndexingSlowLog log = new IndexingSlowLog(settings);
 
-        ParsedDocument doc = InternalEngineTests.createParsedDoc("1", null);
+        ParsedDocument doc = EngineTestCase.createParsedDoc("1", null);
         Engine.Index index = new Engine.Index(new Term("_id", Uid.encodeId("doc_id")), randomNonNegativeLong(), doc);
         Engine.IndexResult result = Mockito.mock(Engine.IndexResult.class);// (0, 0, SequenceNumbers.UNASSIGNED_SEQ_NO, false);
         Mockito.when(result.getResultType()).thenReturn(Engine.Result.Type.SUCCESS);
@@ -128,7 +125,7 @@ public class IndexingSlowLogTests extends ESTestCase {
             createIndexMetadata(
                 "index1",
                 Settings.builder()
-                    .put(IndexMetadata.SETTING_VERSION_CREATED, Version.CURRENT)
+                    .put(IndexMetadata.SETTING_VERSION_CREATED, IndexVersion.current())
                     .put(IndexMetadata.SETTING_INDEX_UUID, UUIDs.randomBase64UUID())
                     .put(IndexingSlowLog.INDEX_INDEXING_SLOWLOG_THRESHOLD_INDEX_WARN_SETTING.getKey(), "40nanos")
                     .build()
@@ -141,7 +138,7 @@ public class IndexingSlowLogTests extends ESTestCase {
             createIndexMetadata(
                 "index2",
                 Settings.builder()
-                    .put(IndexMetadata.SETTING_VERSION_CREATED, Version.CURRENT)
+                    .put(IndexMetadata.SETTING_VERSION_CREATED, IndexVersion.current())
                     .put(IndexMetadata.SETTING_INDEX_UUID, UUIDs.randomBase64UUID())
                     .put(IndexingSlowLog.INDEX_INDEXING_SLOWLOG_THRESHOLD_INDEX_TRACE_SETTING.getKey(), "10nanos")
                     .build()
@@ -150,7 +147,7 @@ public class IndexingSlowLogTests extends ESTestCase {
         );
         IndexingSlowLog log2 = new IndexingSlowLog(index2Settings);
 
-        ParsedDocument doc = InternalEngineTests.createParsedDoc("1", null);
+        ParsedDocument doc = EngineTestCase.createParsedDoc("1", null);
         Engine.Index index = new Engine.Index(new Term("_id", Uid.encodeId("doc_id")), randomNonNegativeLong(), doc);
         Engine.IndexResult result = Mockito.mock(Engine.IndexResult.class);
         Mockito.when(result.getResultType()).thenReturn(Engine.Result.Type.SUCCESS);
@@ -190,7 +187,7 @@ public class IndexingSlowLogTests extends ESTestCase {
 
     private Settings settings(String uuid) {
         return Settings.builder()
-            .put(IndexMetadata.SETTING_VERSION_CREATED, Version.CURRENT)
+            .put(IndexMetadata.SETTING_VERSION_CREATED, IndexVersion.current())
             .put(IndexMetadata.SETTING_INDEX_UUID, uuid)
             .put(IndexingSlowLog.INDEX_INDEXING_SLOWLOG_THRESHOLD_INDEX_TRACE_SETTING.getKey(), "10nanos")
             .put(IndexingSlowLog.INDEX_INDEXING_SLOWLOG_THRESHOLD_INDEX_DEBUG_SETTING.getKey(), "20nanos")
@@ -289,21 +286,12 @@ public class IndexingSlowLogTests extends ESTestCase {
             null
         );
 
-        final UncheckedIOException e = expectThrows(UncheckedIOException.class, () -> IndexingSlowLogMessage.of(index, doc, 10, true, 3));
+        final XContentParseException e = expectThrows(
+            XContentParseException.class,
+            () -> IndexingSlowLogMessage.of(index, doc, 10, true, 3)
+        );
         assertThat(
             e,
-            hasToString(
-                containsString(
-                    "_failed_to_convert_[Unrecognized token 'invalid':"
-                        + " was expecting (JSON String, Number, Array, Object or token 'null', 'true' or 'false')\\n"
-                        + " at [Source: "
-                )
-            )
-        );
-        assertNotNull(e.getCause());
-        assertThat(e.getCause(), instanceOf(JsonParseException.class));
-        assertThat(
-            e.getCause(),
             hasToString(
                 containsString(
                     "Unrecognized token 'invalid':"
@@ -318,7 +306,7 @@ public class IndexingSlowLogTests extends ESTestCase {
         IndexMetadata metadata = newIndexMeta(
             "index",
             Settings.builder()
-                .put(IndexMetadata.SETTING_VERSION_CREATED, Version.CURRENT)
+                .put(IndexMetadata.SETTING_VERSION_CREATED, IndexVersion.current())
                 .put(IndexingSlowLog.INDEX_INDEXING_SLOWLOG_REFORMAT_SETTING.getKey(), false)
                 .build()
         );
@@ -338,7 +326,7 @@ public class IndexingSlowLogTests extends ESTestCase {
         settings.updateIndexMetadata(newIndexMeta("index", Settings.EMPTY));
         assertTrue(log.isReformat());
 
-        metadata = newIndexMeta("index", Settings.builder().put(IndexMetadata.SETTING_VERSION_CREATED, Version.CURRENT).build());
+        metadata = newIndexMeta("index", Settings.builder().put(IndexMetadata.SETTING_VERSION_CREATED, IndexVersion.current()).build());
         settings = new IndexSettings(metadata, Settings.EMPTY);
         log = new IndexingSlowLog(settings);
         assertTrue(log.isReformat());
@@ -365,7 +353,7 @@ public class IndexingSlowLogTests extends ESTestCase {
         IndexMetadata metadata = newIndexMeta(
             "index",
             Settings.builder()
-                .put(IndexMetadata.SETTING_VERSION_CREATED, Version.CURRENT)
+                .put(IndexMetadata.SETTING_VERSION_CREATED, IndexVersion.current())
                 .put(IndexingSlowLog.INDEX_INDEXING_SLOWLOG_THRESHOLD_INDEX_TRACE_SETTING.getKey(), "100ms")
                 .put(IndexingSlowLog.INDEX_INDEXING_SLOWLOG_THRESHOLD_INDEX_DEBUG_SETTING.getKey(), "200ms")
                 .put(IndexingSlowLog.INDEX_INDEXING_SLOWLOG_THRESHOLD_INDEX_INFO_SETTING.getKey(), "300ms")
@@ -396,7 +384,7 @@ public class IndexingSlowLogTests extends ESTestCase {
         assertEquals(TimeValue.timeValueMillis(320).nanos(), log.getIndexInfoThreshold());
         assertEquals(TimeValue.timeValueMillis(420).nanos(), log.getIndexWarnThreshold());
 
-        metadata = newIndexMeta("index", Settings.builder().put(IndexMetadata.SETTING_VERSION_CREATED, Version.CURRENT).build());
+        metadata = newIndexMeta("index", Settings.builder().put(IndexMetadata.SETTING_VERSION_CREATED, IndexVersion.current()).build());
         settings.updateIndexMetadata(metadata);
         assertEquals(TimeValue.timeValueMillis(-1).nanos(), log.getIndexTraceThreshold());
         assertEquals(TimeValue.timeValueMillis(-1).nanos(), log.getIndexDebugThreshold());
@@ -480,13 +468,6 @@ public class IndexingSlowLogTests extends ESTestCase {
     }
 
     private IndexMetadata newIndexMeta(String name, Settings indexSettings) {
-        Settings build = Settings.builder()
-            .put(IndexMetadata.SETTING_VERSION_CREATED, Version.CURRENT)
-            .put(IndexMetadata.SETTING_NUMBER_OF_REPLICAS, 1)
-            .put(IndexMetadata.SETTING_NUMBER_OF_SHARDS, 1)
-            .put(indexSettings)
-            .build();
-        IndexMetadata metadata = IndexMetadata.builder(name).settings(build).build();
-        return metadata;
+        return IndexMetadata.builder(name).settings(indexSettings(IndexVersion.current(), 1, 1).put(indexSettings)).build();
     }
 }

@@ -8,7 +8,9 @@
 
 package org.elasticsearch.search.aggregations.metrics;
 
+import org.elasticsearch.common.util.Maps;
 import org.elasticsearch.search.DocValueFormat;
+import org.elasticsearch.search.aggregations.support.SamplingContext;
 
 import java.util.Arrays;
 import java.util.HashMap;
@@ -17,6 +19,7 @@ import java.util.List;
 import java.util.Map;
 
 import static java.util.Collections.emptyMap;
+import static org.hamcrest.Matchers.equalTo;
 
 public class InternalTDigestPercentilesTests extends InternalPercentilesTestCase<InternalTDigestPercentiles> {
 
@@ -27,18 +30,21 @@ public class InternalTDigestPercentilesTests extends InternalPercentilesTestCase
         boolean keyed,
         DocValueFormat format,
         double[] percents,
-        double[] values
+        double[] values,
+        boolean empty
     ) {
-        final TDigestState state = new TDigestState(100);
+        if (empty) {
+            return new InternalTDigestPercentiles(name, percents, null, keyed, format, metadata);
+        }
+        final TDigestState state = TDigestState.create(100);
         Arrays.stream(values).forEach(state::add);
 
-        assertEquals(state.centroidCount(), values.length);
         return new InternalTDigestPercentiles(name, percents, state, keyed, format, metadata);
     }
 
     @Override
     protected void assertReduced(InternalTDigestPercentiles reduced, List<InternalTDigestPercentiles> inputs) {
-        final TDigestState expectedState = new TDigestState(reduced.state.compression());
+        final TDigestState expectedState = TDigestState.createUsingParamsFrom(reduced.state);
 
         long totalCount = 0;
         for (InternalTDigestPercentiles input : inputs) {
@@ -51,6 +57,20 @@ public class InternalTDigestPercentilesTests extends InternalPercentilesTestCase
         if (totalCount > 0) {
             assertEquals(expectedState.quantile(0), reduced.state.quantile(0), 0d);
             assertEquals(expectedState.quantile(1), reduced.state.quantile(1), 0d);
+        }
+    }
+
+    @Override
+    protected boolean supportsSampling() {
+        return true;
+    }
+
+    @Override
+    protected void assertSampled(InternalTDigestPercentiles sampled, InternalTDigestPercentiles reduced, SamplingContext samplingContext) {
+        Iterator<Percentile> it1 = sampled.iterator();
+        Iterator<Percentile> it2 = reduced.iterator();
+        while (it1.hasNext() && it2.hasNext()) {
+            assertThat(it1.next(), equalTo(it2.next()));
         }
     }
 
@@ -68,35 +88,30 @@ public class InternalTDigestPercentilesTests extends InternalPercentilesTestCase
         DocValueFormat formatter = instance.formatter();
         Map<String, Object> metadata = instance.getMetadata();
         switch (between(0, 4)) {
-            case 0:
-                name += randomAlphaOfLength(5);
-                break;
-            case 1:
+            case 0 -> name += randomAlphaOfLength(5);
+            case 1 -> {
                 percents = Arrays.copyOf(percents, percents.length + 1);
                 percents[percents.length - 1] = randomDouble() * 100;
                 Arrays.sort(percents);
-                break;
-            case 2:
-                TDigestState newState = new TDigestState(state.compression());
+            }
+            case 2 -> {
+                TDigestState newState = TDigestState.createUsingParamsFrom(state);
                 newState.add(state);
                 for (int i = 0; i < between(10, 100); i++) {
                     newState.add(randomDouble());
                 }
                 state = newState;
-                break;
-            case 3:
-                keyed = keyed == false;
-                break;
-            case 4:
+            }
+            case 3 -> keyed = keyed == false;
+            case 4 -> {
                 if (metadata == null) {
-                    metadata = new HashMap<>(1);
+                    metadata = Maps.newMapWithExpectedSize(1);
                 } else {
                     metadata = new HashMap<>(instance.getMetadata());
                 }
                 metadata.put(randomAlphaOfLength(15), randomInt());
-                break;
-            default:
-                throw new AssertionError("Illegal randomisation branch");
+            }
+            default -> throw new AssertionError("Illegal randomisation branch");
         }
         return new InternalTDigestPercentiles(name, percents, state, keyed, formatter, metadata);
     }
@@ -114,7 +129,8 @@ public class InternalTDigestPercentilesTests extends InternalPercentilesTestCase
             false,
             randomNumericDocValueFormat(),
             percents,
-            values
+            values,
+            false
         );
 
         Iterator<Percentile> iterator = aggregation.iterator();
@@ -126,10 +142,10 @@ public class InternalTDigestPercentilesTests extends InternalPercentilesTestCase
             String percentileName = nameIterator.next();
 
             assertEquals(percent, Double.valueOf(percentileName), 0.0d);
-            assertEquals(percent, percentile.getPercent(), 0.0d);
+            assertEquals(percent, percentile.percent(), 0.0d);
 
-            assertEquals(aggregation.percentile(percent), percentile.getValue(), 0.0d);
-            assertEquals(aggregation.value(String.valueOf(percent)), percentile.getValue(), 0.0d);
+            assertEquals(aggregation.percentile(percent), percentile.value(), 0.0d);
+            assertEquals(aggregation.value(String.valueOf(percent)), percentile.value(), 0.0d);
         }
         assertFalse(iterator.hasNext());
         assertFalse(nameIterator.hasNext());

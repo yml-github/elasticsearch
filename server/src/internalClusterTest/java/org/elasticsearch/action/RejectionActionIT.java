@@ -36,8 +36,6 @@ public class RejectionActionIT extends ESIntegTestCase {
             .put(super.nodeSettings(nodeOrdinal, otherSettings))
             .put("thread_pool.search.size", 1)
             .put("thread_pool.search.queue_size", 1)
-            .put("thread_pool.write.size", 1)
-            .put("thread_pool.write.queue_size", 1)
             .put("thread_pool.get.size", 1)
             .put("thread_pool.get.queue_size", 1)
             .build();
@@ -45,15 +43,14 @@ public class RejectionActionIT extends ESIntegTestCase {
 
     public void testSimulatedSearchRejectionLoad() throws Throwable {
         for (int i = 0; i < 10; i++) {
-            client().prepareIndex("test").setId(Integer.toString(i)).setSource("field", "1").get();
+            prepareIndex("test").setId(Integer.toString(i)).setSource("field", "1").get();
         }
 
         int numberOfAsyncOps = randomIntBetween(200, 700);
         final CountDownLatch latch = new CountDownLatch(numberOfAsyncOps);
         final CopyOnWriteArrayList<Object> responses = new CopyOnWriteArrayList<>();
         for (int i = 0; i < numberOfAsyncOps; i++) {
-            client().prepareSearch("test")
-                .setSearchType(SearchType.QUERY_THEN_FETCH)
+            prepareSearch("test").setSearchType(SearchType.QUERY_THEN_FETCH)
                 .setQuery(QueryBuilders.matchQuery("field", "1"))
                 .execute(new LatchedActionListener<>(new ActionListener<SearchResponse>() {
                     @Override
@@ -71,8 +68,7 @@ public class RejectionActionIT extends ESIntegTestCase {
 
         // validate all responses
         for (Object response : responses) {
-            if (response instanceof SearchResponse) {
-                SearchResponse searchResponse = (SearchResponse) response;
+            if (response instanceof SearchResponse searchResponse) {
                 for (ShardSearchFailure failure : searchResponse.getShardFailures()) {
                     assertThat(
                         failure.reason().toLowerCase(Locale.ENGLISH),
@@ -82,8 +78,7 @@ public class RejectionActionIT extends ESIntegTestCase {
             } else {
                 Exception t = (Exception) response;
                 Throwable unwrap = ExceptionsHelper.unwrapCause(t);
-                if (unwrap instanceof SearchPhaseExecutionException) {
-                    SearchPhaseExecutionException e = (SearchPhaseExecutionException) unwrap;
+                if (unwrap instanceof SearchPhaseExecutionException e) {
                     for (ShardSearchFailure failure : e.shardFailures()) {
                         assertThat(
                             failure.reason().toLowerCase(Locale.ENGLISH),

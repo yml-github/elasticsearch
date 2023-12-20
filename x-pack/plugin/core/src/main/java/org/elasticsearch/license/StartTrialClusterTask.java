@@ -7,13 +7,14 @@
 package org.elasticsearch.license;
 
 import org.apache.logging.log4j.Logger;
-import org.apache.logging.log4j.message.ParameterizedMessage;
-import org.elasticsearch.Version;
 import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.cluster.ClusterState;
-import org.elasticsearch.cluster.ClusterStateUpdateTask;
+import org.elasticsearch.cluster.ClusterStateTaskExecutor;
+import org.elasticsearch.cluster.ClusterStateTaskListener;
 import org.elasticsearch.cluster.metadata.Metadata;
+import org.elasticsearch.cluster.node.DiscoveryNodes;
 import org.elasticsearch.core.Nullable;
+import org.elasticsearch.license.internal.TrialLicenseVersion;
 import org.elasticsearch.xpack.core.XPackPlugin;
 
 import java.time.Clock;
@@ -21,7 +22,7 @@ import java.util.Collections;
 import java.util.Map;
 import java.util.UUID;
 
-public class StartTrialClusterTask extends ClusterStateUpdateTask {
+public class StartTrialClusterTask implements ClusterStateTaskListener {
 
     private static final String ACKNOWLEDGEMENT_HEADER = "This API initiates a free 30-day trial for all platinum features. "
         + "By starting this trial, you agree that it is subject to the terms and conditions at"
@@ -32,6 +33,8 @@ public class StartTrialClusterTask extends ClusterStateUpdateTask {
         "security",
         new String[] { "With a trial license, X-Pack security features are available, but are not enabled by default." }
     );
+
+    static final String TASK_SOURCE = "started trial license";
 
     private final Logger logger;
     private final String clusterName;
@@ -53,33 +56,34 @@ public class StartTrialClusterTask extends ClusterStateUpdateTask {
         this.clock = clock;
     }
 
-    @Override
-    public void clusterStateProcessed(String source, ClusterState oldState, ClusterState newState) {
-        LicensesMetadata oldLicensesMetadata = oldState.metadata().custom(LicensesMetadata.TYPE);
-        logger.debug("started self generated trial license: {}", oldLicensesMetadata);
-
-        if (request.isAcknowledged() == false) {
-            listener.onResponse(
-                new PostStartTrialResponse(PostStartTrialResponse.Status.NEED_ACKNOWLEDGEMENT, ACK_MESSAGES, ACKNOWLEDGEMENT_HEADER)
+    private LicensesMetadata execute(
+        LicensesMetadata currentLicensesMetadata,
+        DiscoveryNodes discoveryNodes,
+        ClusterStateTaskExecutor.TaskContext<StartTrialClusterTask> taskContext
+    ) {
+        assert taskContext.getTask() == this;
+        if (discoveryNodes.getMaxNodeVersion().after(discoveryNodes.getSmallestNonClientNodeVersion())) {
+            throw new IllegalStateException(
+                "Please ensure all nodes are on the same version before starting your trial, the highest node version in this cluster is ["
+                    + discoveryNodes.getMaxNodeVersion()
+                    + "] and the lowest node version is ["
+                    + discoveryNodes.getMinNodeVersion()
+                    + "]"
             );
-        } else if (oldLicensesMetadata == null || oldLicensesMetadata.isEligibleForTrial()) {
-            listener.onResponse(new PostStartTrialResponse(PostStartTrialResponse.Status.UPGRADED_TO_TRIAL));
-        } else {
-            listener.onResponse(new PostStartTrialResponse(PostStartTrialResponse.Status.TRIAL_ALREADY_ACTIVATED));
         }
-    }
-
-    @Override
-    public ClusterState execute(ClusterState currentState) throws Exception {
-        XPackPlugin.checkReadyForXPackCustomMetadata(currentState);
-        LicensesMetadata currentLicensesMetadata = currentState.metadata().custom(LicensesMetadata.TYPE);
-
+        final var listener = ActionListener.runBefore(this.listener, () -> {
+            logger.debug("started self generated trial license: {}", currentLicensesMetadata);
+        });
         if (request.isAcknowledged() == false) {
-            return currentState;
+            taskContext.success(
+                () -> listener.onResponse(
+                    new PostStartTrialResponse(PostStartTrialResponse.Status.NEED_ACKNOWLEDGEMENT, ACK_MESSAGES, ACKNOWLEDGEMENT_HEADER)
+                )
+            );
+            return currentLicensesMetadata;
         } else if (currentLicensesMetadata == null || currentLicensesMetadata.isEligibleForTrial()) {
             long issueDate = clock.millis();
-            Metadata.Builder mdBuilder = Metadata.builder(currentState.metadata());
-            long expiryDate = issueDate + LicenseService.NON_BASIC_SELF_GENERATED_LICENSE_DURATION.getMillis();
+            long expiryDate = issueDate + LicenseSettings.NON_BASIC_SELF_GENERATED_LICENSE_DURATION.getMillis();
 
             License.Builder specBuilder = License.builder()
                 .uid(UUID.randomUUID().toString())
@@ -88,22 +92,49 @@ public class StartTrialClusterTask extends ClusterStateUpdateTask {
                 .type(request.getType())
                 .expiryDate(expiryDate);
             if (License.LicenseType.isEnterprise(request.getType())) {
-                specBuilder.maxResourceUnits(LicenseService.SELF_GENERATED_LICENSE_MAX_RESOURCE_UNITS);
+                specBuilder.maxResourceUnits(LicenseSettings.SELF_GENERATED_LICENSE_MAX_RESOURCE_UNITS);
             } else {
-                specBuilder.maxNodes(LicenseService.SELF_GENERATED_LICENSE_MAX_NODES);
+                specBuilder.maxNodes(LicenseSettings.SELF_GENERATED_LICENSE_MAX_NODES);
             }
-            License selfGeneratedLicense = SelfGeneratedLicense.create(specBuilder, currentState.nodes());
-            LicensesMetadata newLicensesMetadata = new LicensesMetadata(selfGeneratedLicense, Version.CURRENT);
-            mdBuilder.putCustom(LicensesMetadata.TYPE, newLicensesMetadata);
-            return ClusterState.builder(currentState).metadata(mdBuilder).build();
+            License selfGeneratedLicense = SelfGeneratedLicense.create(specBuilder, discoveryNodes);
+            LicensesMetadata newLicensesMetadata = new LicensesMetadata(selfGeneratedLicense, TrialLicenseVersion.CURRENT);
+            taskContext.success(() -> listener.onResponse(new PostStartTrialResponse(PostStartTrialResponse.Status.UPGRADED_TO_TRIAL)));
+            return newLicensesMetadata;
         } else {
-            return currentState;
+            taskContext.success(
+                () -> listener.onResponse(new PostStartTrialResponse(PostStartTrialResponse.Status.TRIAL_ALREADY_ACTIVATED))
+            );
+            return currentLicensesMetadata;
         }
     }
 
     @Override
-    public void onFailure(String source, @Nullable Exception e) {
-        logger.error(new ParameterizedMessage("unexpected failure during [{}]", source), e);
+    public void onFailure(@Nullable Exception e) {
+        logger.error("unexpected failure during [" + TASK_SOURCE + "]", e);
         listener.onFailure(e);
     }
+
+    static class Executor implements ClusterStateTaskExecutor<StartTrialClusterTask> {
+
+        @Override
+        public ClusterState execute(BatchExecutionContext<StartTrialClusterTask> batchExecutionContext) throws Exception {
+            final var initialState = batchExecutionContext.initialState();
+            XPackPlugin.checkReadyForXPackCustomMetadata(initialState);
+            final LicensesMetadata originalLicensesMetadata = initialState.metadata().custom(LicensesMetadata.TYPE);
+            var currentLicensesMetadata = originalLicensesMetadata;
+            for (final var taskContext : batchExecutionContext.taskContexts()) {
+                try (var ignored = taskContext.captureResponseHeaders()) {
+                    currentLicensesMetadata = taskContext.getTask().execute(currentLicensesMetadata, initialState.nodes(), taskContext);
+                }
+            }
+            if (currentLicensesMetadata == originalLicensesMetadata) {
+                return initialState;
+            } else {
+                return ClusterState.builder(initialState)
+                    .metadata(Metadata.builder(initialState.metadata()).putCustom(LicensesMetadata.TYPE, currentLicensesMetadata))
+                    .build();
+            }
+        }
+    }
+
 }

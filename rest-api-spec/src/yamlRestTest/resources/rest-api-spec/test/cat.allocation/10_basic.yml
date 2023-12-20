@@ -1,5 +1,10 @@
 ---
 "Help":
+
+  - skip:
+      version: " - 8.9.99"
+      reason:  "node.role column added in 8.10.0"
+
   - do:
       cat.allocation:
         help: true
@@ -15,32 +20,15 @@
                    host              .+   \n
                    ip                .+   \n
                    node              .+   \n
+                   node.role         .+   \n
                $/
 
 ---
-"Empty cluster":
-
-  - do:
-      cat.allocation: {}
-
-  - match:
-      $body: |
-            /^
-              ( 0                      \s+
-                0b                     \s+
-                \d+(\.\d+)?[kmgt]?b    \s+
-                (\d+(\.\d+)?[kmgt]b    \s+)?  #no value from client nodes
-                (\d+(\.\d+)?[kmgt]b    \s+)?  #no value from client nodes
-                (\d+                   \s+)?  #no value from client nodes
-                [-\w.]+                \s+
-                \d+(\.\d+){3}          \s+
-                [-\w.]+
-                \n
-              )+
-            $/
-
----
 "One index":
+
+  - skip:
+      version: " - 8.11.99"
+      reason:  "node.role column shown by default from 8.12.0 onwards"
 
   - do:
         indices.create:
@@ -61,19 +49,24 @@
                 (\d+                  \s+)  #always should return value since we filter out non data nodes by default
                 [-\w.]+                \s+
                 \d+(\.\d+){3}          \s+
-                [-\w.]+
+                [-\w.]+                \s+
+                [\w]+
                 \n
               )+
               (
                 \s*                          #allow leading spaces to account for right-justified text
                 \d+                    \s+
-                UNASSIGNED
+                UNASSIGNED             \s*
                 \n
               )?
             $/
 
 ---
 "Node ID":
+
+  - skip:
+      version: " - 8.11.99"
+      reason:  "node.role column shown by default from 8.12.0 onwards"
 
   - do:
         cat.allocation:
@@ -82,7 +75,7 @@
   - match:
       $body: |
             /^
-              ( 0                      \s+
+              ( \d+                    \s+   #usually 0, unless some system index has been recreated before this runs
                 \d+(\.\d+)?[kmgt]?b    \s+
                 \d+(\.\d+)?[kmgt]?b    \s+
                 (\d+(\.\d+)?[kmgt]b   \s+)?  #no value from client nodes
@@ -90,7 +83,8 @@
                 (\d+                  \s+)?  #no value from client nodes
                 [-\w.]+                \s+
                 \d+(\.\d+){3}          \s+
-                [-\w.]+
+                [-\w.]+                \s+
+                [\w]+
                 \n
               )
             $/
@@ -108,6 +102,10 @@
 
 "All Nodes":
 
+   - skip:
+      version: " - 8.11.99"
+      reason:  "node.role column shown by default from 8.12.0 onwards"
+
    - do:
          cat.allocation:
            node_id: "*"
@@ -116,7 +114,7 @@
        $body: |
              /^
                ( \s*                          #allow leading spaces to account for right-justified text
-                 \d+                    \s+
+                 \d+                    \s+   #usually 0, unless some system index has been recreated before this runs
                  \d+(\.\d+)?[kmgt]?b    \s+
                  \d+(\.\d+)?[kmgt]?b    \s+
                  (\d+(\.\d+)?[kmgt]b   \s+)?  #no value from client nodes
@@ -124,19 +122,24 @@
                  (\d+                  \s+)?  #no value from client nodes
                  [-\w.]+                \s+
                  \d+(\.\d+){3}          \s+
-                 [-\w.]+
+                 [-\w.]+                \s+
+                 [\w]+
                  \n
                )+
                (
                  \s*                          #allow leading spaces to account for right-justified text
                  \d+                    \s+
-                 UNASSIGNED
+                 UNASSIGNED             \s*
                  \n
                )?
              $/
 
 ---
 "Column headers":
+
+  - skip:
+      version: " - 8.11.99"
+      reason:  "node.role column shown by default from 8.12.0 onwards"
 
   - do:
         cat.allocation:
@@ -152,19 +155,21 @@
                disk.percent            \s+
                host                    \s+
                ip                      \s+
-               node
+               node                    \s+
+               node.role
                \n
 
               ( \s*                          #allow leading spaces to account for right-justified text
-                0                      \s+
-                0b                     \s+
+                \d+                    \s+   #usually 0, unless some system index has been recreated before this runs
+                \d+(\.\d+)?[kmgt]?b    \s+
                 \d+(\.\d+)?[kmgt]?b    \s+
                 (\d+(\.\d+)?[kmgt]b   \s+)  #always should return value since we filter out non data nodes by default
                 (\d+(\.\d+)?[kmgt]b   \s+)  #always should return value since we filter out non data nodes by default
                 (\d+                  \s+)  #always should return value since we filter out non data nodes by default
                 [-\w.]+                \s+
                 \d+(\.\d+){3}          \s+
-                [-\w.]+
+                [-\w.]+                \s+
+                [\w]+
                 \n
               )+
             $/
@@ -209,6 +214,10 @@
 
 "Bytes":
 
+  - skip:
+      version: " - 8.11.99"
+      reason:  "node.role column shown by default from 8.12.0 onwards"
+
   - do:
       cat.allocation:
         bytes: gb
@@ -216,7 +225,7 @@
   - match:
       $body: |
             /^
-              ( 0                   \s+
+              ( \d+                 \s+    #usually 0, unless some system index has been recreated before this runs
                 0                   \s+
                 \d+                 \s+
                 (\d+                 \s+)  #always should return value since we filter out non data nodes by default
@@ -224,7 +233,29 @@
                 (\d+                 \s+)  #always should return value since we filter out non data nodes by default
                 [-\w.]+             \s+
                 \d+(\.\d+){3}       \s+
-                [-\w.]+
+                [-\w.]+             \s+
+                [\w]+
                 \n
               )+
             $/
+
+---
+
+"Node roles":
+
+  - skip:
+      version: " - 8.9.99"
+      reason:  "node.role column added in 8.10.0"
+
+  - do:
+      cat.allocation:
+        h: [node, node.role]
+
+  - match:
+      $body: |
+        /^
+          ( [-\w.]+                \s+
+            [\w]+
+            \n
+          )+
+        $/

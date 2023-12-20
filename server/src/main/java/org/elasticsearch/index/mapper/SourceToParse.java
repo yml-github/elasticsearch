@@ -27,31 +27,49 @@ public class SourceToParse {
     private final XContentType xContentType;
 
     private final Map<String, String> dynamicTemplates;
+    private boolean toBeReported;
 
     public SourceToParse(
-        String id,
+        @Nullable String id,
         BytesReference source,
         XContentType xContentType,
         @Nullable String routing,
-        Map<String, String> dynamicTemplates
+        Map<String, String> dynamicTemplates,
+        boolean toBeReported
     ) {
-        this.id = Objects.requireNonNull(id);
+        this.id = id;
         // we always convert back to byte array, since we store it and Field only supports bytes..
         // so, we might as well do it here, and improve the performance of working with direct byte arrays
         this.source = new BytesArray(Objects.requireNonNull(source).toBytesRef());
         this.xContentType = Objects.requireNonNull(xContentType);
         this.routing = routing;
         this.dynamicTemplates = Objects.requireNonNull(dynamicTemplates);
+        this.toBeReported = toBeReported;
     }
 
     public SourceToParse(String id, BytesReference source, XContentType xContentType) {
-        this(id, source, xContentType, null, Map.of());
+        this(id, source, xContentType, null, Map.of(), false);
+    }
+
+    public boolean toBeReported() {
+        return toBeReported;
     }
 
     public BytesReference source() {
         return this.source;
     }
 
+    /**
+     * The {@code _id} provided on the request or calculated on the
+     * coordinating node. If the index is in {@code time_series} mode then
+     * the coordinating node will not calculate the {@code _id}. In that
+     * case this will be {@code null} if one isn't sent on the request.
+     * <p>
+     * Use {@link DocumentParserContext#documentDescription()} to generate
+     * a description of the document for errors instead of calling this
+     * method.
+     */
+    @Nullable
     public String id() {
         return this.id;
     }

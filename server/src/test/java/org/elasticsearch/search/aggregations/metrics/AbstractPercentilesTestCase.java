@@ -11,6 +11,7 @@ package org.elasticsearch.search.aggregations.metrics;
 import org.elasticsearch.common.Strings;
 import org.elasticsearch.search.DocValueFormat;
 import org.elasticsearch.search.aggregations.Aggregation.CommonFields;
+import org.elasticsearch.search.aggregations.AggregationBuilder;
 import org.elasticsearch.search.aggregations.InternalAggregation;
 import org.elasticsearch.test.InternalAggregationTestCase;
 import org.elasticsearch.xcontent.ToXContent;
@@ -23,11 +24,14 @@ import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.NoSuchElementException;
 import java.util.function.Predicate;
 import java.util.stream.Stream;
 
+import static java.util.Collections.emptyMap;
 import static java.util.stream.Collectors.toList;
 import static org.hamcrest.Matchers.equalTo;
+import static org.mockito.Mockito.mock;
 
 public abstract class AbstractPercentilesTestCase<T extends InternalAggregation & Iterable<Percentile>> extends InternalAggregationTestCase<
     T> {
@@ -37,11 +41,14 @@ public abstract class AbstractPercentilesTestCase<T extends InternalAggregation 
     }
 
     @Override
-    protected List<T> randomResultsToReduce(String name, int size) {
+    protected BuilderAndToReduce<T> randomResultsToReduce(String name, int size) {
         boolean keyed = randomBoolean();
         DocValueFormat format = randomNumericDocValueFormat();
         double[] percents = randomPercents(false);
-        return Stream.generate(() -> createTestInstance(name, null, keyed, format, percents)).limit(size).collect(toList());
+        return new BuilderAndToReduce<T>(
+            mock(AggregationBuilder.class),
+            Stream.generate(() -> createTestInstance(name, null, keyed, format, percents)).limit(size).collect(toList())
+        );
     }
 
     private T createTestInstance(String name, Map<String, Object> metadata, boolean keyed, DocValueFormat format, double[] percents) {
@@ -50,7 +57,7 @@ public abstract class AbstractPercentilesTestCase<T extends InternalAggregation 
         for (int i = 0; i < numValues; ++i) {
             values[i] = randomDouble();
         }
-        return createTestInstance(name, metadata, keyed, format, percents, values);
+        return createTestInstance(name, metadata, keyed, format, percents, values, false);
     }
 
     protected abstract T createTestInstance(
@@ -59,7 +66,8 @@ public abstract class AbstractPercentilesTestCase<T extends InternalAggregation 
         boolean keyed,
         DocValueFormat format,
         double[] percents,
-        double[] values
+        double[] values,
+        boolean empty
     );
 
     protected abstract Class<? extends ParsedPercentiles> implementationClass();
@@ -99,10 +107,10 @@ public abstract class AbstractPercentilesTestCase<T extends InternalAggregation 
         boolean keyed = randomBoolean();
         DocValueFormat docValueFormat = randomNumericDocValueFormat();
 
-        T agg = createTestInstance("test", Collections.emptyMap(), keyed, docValueFormat, percents, new double[0]);
+        T agg = createTestInstance("test", Collections.emptyMap(), keyed, docValueFormat, percents, new double[0], false);
 
         for (Percentile percentile : agg) {
-            Double value = percentile.getValue();
+            Double value = percentile.value();
             assertPercentile(agg, value);
         }
 
@@ -141,5 +149,27 @@ public abstract class AbstractPercentilesTestCase<T extends InternalAggregation 
         }
 
         assertThat(Strings.toString(builder), equalTo(expected));
+    }
+
+    public void testEmptyIterator() {
+        final double[] percents = randomPercents(false);
+
+        final Iterable<?> aggregation = createTestInstance(
+            "test",
+            emptyMap(),
+            false,
+            randomNumericDocValueFormat(),
+            percents,
+            new double[] {},
+            true
+        );
+
+        for (var ignored : aggregation) {
+            fail("empty expected");
+        }
+
+        final Iterator<?> it = aggregation.iterator();
+        assertFalse(it.hasNext());
+        expectThrows(NoSuchElementException.class, it::next);
     }
 }

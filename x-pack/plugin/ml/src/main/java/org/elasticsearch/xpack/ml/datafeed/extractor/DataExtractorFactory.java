@@ -11,6 +11,7 @@ import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.action.support.IndicesOptions;
 import org.elasticsearch.client.internal.Client;
 import org.elasticsearch.index.IndexNotFoundException;
+import org.elasticsearch.index.query.QueryBuilder;
 import org.elasticsearch.license.RemoteClusterLicenseChecker;
 import org.elasticsearch.xcontent.NamedXContentRegistry;
 import org.elasticsearch.xpack.core.ClientHelper;
@@ -41,12 +42,27 @@ public interface DataExtractorFactory {
         DatafeedTimingStatsReporter timingStatsReporter,
         ActionListener<DataExtractorFactory> listener
     ) {
+        create(client, datafeed, null, job, xContentRegistry, timingStatsReporter, listener);
+    }
+
+    /**
+     * Creates a {@code DataExtractorFactory} for the given datafeed-job combination.
+     */
+    static void create(
+        Client client,
+        DatafeedConfig datafeed,
+        QueryBuilder extraFilters,
+        Job job,
+        NamedXContentRegistry xContentRegistry,
+        DatafeedTimingStatsReporter timingStatsReporter,
+        ActionListener<DataExtractorFactory> listener
+    ) {
         final boolean hasAggs = datafeed.hasAggregations();
         final boolean isComposite = hasAggs && datafeed.hasCompositeAgg(xContentRegistry);
         ActionListener<DataExtractorFactory> factoryHandler = ActionListener.wrap(
             factory -> listener.onResponse(
                 datafeed.getChunkingConfig().isEnabled()
-                    ? new ChunkedDataExtractorFactory(client, datafeed, job, xContentRegistry, factory, timingStatsReporter)
+                    ? new ChunkedDataExtractorFactory(client, datafeed, extraFilters, job, xContentRegistry, factory, timingStatsReporter)
                     : factory
             ),
             listener::onFailure
@@ -59,14 +75,22 @@ public interface DataExtractorFactory {
                 return;
             }
             if (hasAggs == false) {
-                ScrollDataExtractorFactory.create(client, datafeed, job, xContentRegistry, timingStatsReporter, factoryHandler);
+                ScrollDataExtractorFactory.create(
+                    client,
+                    datafeed,
+                    extraFilters,
+                    job,
+                    xContentRegistry,
+                    timingStatsReporter,
+                    factoryHandler
+                );
                 return;
             }
             if (hasRollup && datafeed.getRuntimeMappings().isEmpty() == false) {
                 // TODO Rollup V2 will support runtime fields
                 listener.onFailure(
                     new IllegalArgumentException(
-                        "The datafeed has runtime_mappings defined, " + "runtime fields are not supported in rollup searches"
+                        "The datafeed has runtime_mappings defined, runtime fields are not supported in rollup searches"
                     )
                 );
                 return;
@@ -80,6 +104,7 @@ public interface DataExtractorFactory {
                 final DataExtractorFactory dataExtractorFactory = new CompositeAggregationDataExtractorFactory(
                     client,
                     datafeed,
+                    extraFilters,
                     job,
                     xContentRegistry,
                     timingStatsReporter,
@@ -97,6 +122,7 @@ public interface DataExtractorFactory {
                 RollupDataExtractorFactory.create(
                     client,
                     datafeed,
+                    extraFilters,
                     job,
                     response.getJobs(),
                     xContentRegistry,
@@ -105,7 +131,7 @@ public interface DataExtractorFactory {
                 );
             } else {
                 factoryHandler.onResponse(
-                    new AggregationDataExtractorFactory(client, datafeed, job, xContentRegistry, timingStatsReporter)
+                    new AggregationDataExtractorFactory(client, datafeed, extraFilters, job, xContentRegistry, timingStatsReporter)
                 );
             }
         }, e -> {

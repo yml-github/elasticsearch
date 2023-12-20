@@ -24,7 +24,6 @@ import java.io.IOException;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
-import java.util.stream.Collectors;
 
 /**
  * Verify repository response
@@ -118,11 +117,11 @@ public class VerifyRepositoryResponse extends ActionResponse implements ToXConte
 
     public VerifyRepositoryResponse(StreamInput in) throws IOException {
         super(in);
-        this.nodes = in.readList(NodeView::new);
+        this.nodes = in.readCollectionAsList(NodeView::new);
     }
 
     public VerifyRepositoryResponse(DiscoveryNode[] nodes) {
-        this.nodes = Arrays.stream(nodes).map(dn -> new NodeView(dn.getId(), dn.getName())).collect(Collectors.toList());
+        this.nodes = Arrays.stream(nodes).map(dn -> new NodeView(dn.getId(), dn.getName())).toList();
     }
 
     public VerifyRepositoryResponse(List<NodeView> nodes) {
@@ -131,7 +130,7 @@ public class VerifyRepositoryResponse extends ActionResponse implements ToXConte
 
     @Override
     public void writeTo(StreamOutput out) throws IOException {
-        out.writeList(nodes);
+        out.writeCollection(nodes);
     }
 
     public List<NodeView> getNodes() {

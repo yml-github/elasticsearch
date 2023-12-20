@@ -9,7 +9,6 @@ package org.elasticsearch.action.admin.indices.template.put;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-import org.apache.logging.log4j.message.ParameterizedMessage;
 import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.action.support.ActionFilters;
 import org.elasticsearch.action.support.master.AcknowledgedResponse;
@@ -25,6 +24,7 @@ import org.elasticsearch.common.compress.CompressedXContent;
 import org.elasticsearch.common.inject.Inject;
 import org.elasticsearch.common.settings.IndexScopedSettings;
 import org.elasticsearch.common.settings.Settings;
+import org.elasticsearch.common.util.concurrent.EsExecutors;
 import org.elasticsearch.tasks.Task;
 import org.elasticsearch.threadpool.ThreadPool;
 import org.elasticsearch.transport.TransportService;
@@ -59,7 +59,7 @@ public class TransportPutIndexTemplateAction extends AcknowledgedTransportMaster
             actionFilters,
             PutIndexTemplateRequest::new,
             indexNameExpressionResolver,
-            ThreadPool.Names.SAME
+            EsExecutors.DIRECT_EXECUTOR_SERVICE
         );
         this.indexTemplateService = indexTemplateService;
         this.indexScopedSettings = indexScopedSettings;
@@ -94,15 +94,15 @@ public class TransportPutIndexTemplateAction extends AcknowledgedTransportMaster
                 .masterTimeout(request.masterNodeTimeout())
                 .version(request.version()),
 
-            new MetadataIndexTemplateService.PutListener() {
+            new ActionListener<>() {
                 @Override
-                public void onResponse(MetadataIndexTemplateService.PutResponse response) {
-                    listener.onResponse(AcknowledgedResponse.of(response.acknowledged()));
+                public void onResponse(AcknowledgedResponse response) {
+                    listener.onResponse(response);
                 }
 
                 @Override
                 public void onFailure(Exception e) {
-                    logger.debug(() -> new ParameterizedMessage("failed to put template [{}]", request.name()), e);
+                    logger.debug(() -> "failed to put template [" + request.name() + "]", e);
                     listener.onFailure(e);
                 }
             }

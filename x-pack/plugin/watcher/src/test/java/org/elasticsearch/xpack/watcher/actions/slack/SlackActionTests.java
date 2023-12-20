@@ -8,7 +8,6 @@ package org.elasticsearch.xpack.watcher.actions.slack;
 
 import org.elasticsearch.ElasticsearchParseException;
 import org.elasticsearch.common.bytes.BytesReference;
-import org.elasticsearch.common.collect.MapBuilder;
 import org.elasticsearch.test.ESTestCase;
 import org.elasticsearch.xcontent.ToXContent;
 import org.elasticsearch.xcontent.XContentBuilder;
@@ -73,7 +72,7 @@ public class SlackActionTests extends ESTestCase {
         Map<String, Object> data = new HashMap<>();
         Payload payload = new Payload.Simple(data);
 
-        Map<String, Object> metadata = MapBuilder.<String, Object>newMapBuilder().put("_key", "_val").map();
+        Map<String, Object> metadata = Map.of("_key", "_val");
 
         ZonedDateTime now = ZonedDateTime.now(ZoneOffset.UTC);
 
@@ -112,19 +111,20 @@ public class SlackActionTests extends ESTestCase {
             HttpRequest request = mock(HttpRequest.class);
             int randomInt = randomIntBetween(0, 2);
             switch (randomInt) {
-                case 0:
+                case 0 -> {
                     messages.add(SentMessages.SentMessage.error(randomAlphaOfLength(10), message, new Exception("unknown error")));
                     hasError = true;
-                    break;
-                case 1:
+                }
+                case 1 -> {
                     when(response.status()).thenReturn(randomIntBetween(300, 600)); // error response
                     messages.add(SentMessages.SentMessage.responded(randomAlphaOfLength(10), message, request, response));
                     hasError = true;
-                    break;
-                case 2:
+                }
+                case 2 -> {
                     when(response.status()).thenReturn(randomIntBetween(200, 299)); // success
                     messages.add(SentMessages.SentMessage.responded(randomAlphaOfLength(10), message, request, response));
                     hasSuccess = true;
+                }
             }
         }
         SentMessages sentMessages = new SentMessages(accountName, messages);

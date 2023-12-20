@@ -7,14 +7,12 @@
 package org.elasticsearch.xpack.ml.datafeed.extractor.aggregation;
 
 import org.elasticsearch.action.ActionRequestBuilder;
-import org.elasticsearch.action.search.SearchAction;
 import org.elasticsearch.action.search.SearchPhaseExecutionException;
 import org.elasticsearch.action.search.SearchRequest;
 import org.elasticsearch.action.search.SearchRequestBuilder;
 import org.elasticsearch.action.search.SearchResponse;
 import org.elasticsearch.action.search.ShardSearchFailure;
 import org.elasticsearch.client.internal.Client;
-import org.elasticsearch.common.collect.MapBuilder;
 import org.elasticsearch.core.TimeValue;
 import org.elasticsearch.core.Tuple;
 import org.elasticsearch.index.query.QueryBuilder;
@@ -29,6 +27,8 @@ import org.elasticsearch.search.aggregations.bucket.composite.TermsValuesSourceB
 import org.elasticsearch.search.aggregations.bucket.histogram.DateHistogramInterval;
 import org.elasticsearch.test.ESTestCase;
 import org.elasticsearch.xpack.core.ml.datafeed.DatafeedTimingStats;
+import org.elasticsearch.xpack.core.ml.datafeed.SearchInterval;
+import org.elasticsearch.xpack.core.ml.datafeed.extractor.DataExtractor;
 import org.elasticsearch.xpack.ml.datafeed.DatafeedTimingStatsReporter;
 import org.elasticsearch.xpack.ml.datafeed.DatafeedTimingStatsReporter.DatafeedTimingStatsPersister;
 import org.junit.Before;
@@ -121,9 +121,9 @@ public class CompositeAggregationDataExtractorTests extends ESTestCase {
             .subAggregation(AggregationBuilders.avg("responsetime").field("responsetime"));
         runtimeMappings = Collections.emptyMap();
         timingStatsReporter = new DatafeedTimingStatsReporter(new DatafeedTimingStats(jobId), mock(DatafeedTimingStatsPersister.class));
-        aggregatedSearchRequestBuilder = (searchSourceBuilder) -> new SearchRequestBuilder(testClient, SearchAction.INSTANCE).setSource(
-            searchSourceBuilder
-        ).setAllowPartialSearchResults(false).setIndices(indices.toArray(String[]::new));
+        aggregatedSearchRequestBuilder = (searchSourceBuilder) -> new SearchRequestBuilder(testClient).setSource(searchSourceBuilder)
+            .setAllowPartialSearchResults(false)
+            .setIndices(indices.toArray(String[]::new));
     }
 
     public void testExtraction() throws IOException {
@@ -161,15 +161,13 @@ public class CompositeAggregationDataExtractorTests extends ESTestCase {
 
         TestDataExtractor extractor = new TestDataExtractor(1000L, 4000L);
 
-        SearchResponse response = createSearchResponse(
-            "buckets",
-            compositeBucket,
-            MapBuilder.<String, Object>newMapBuilder().put("time_bucket", 4000L).put("airline", "d").map()
-        );
+        SearchResponse response = createSearchResponse("buckets", compositeBucket, Map.of("time_bucket", 4000L, "airline", "d"));
         extractor.setNextResponse(response);
 
         assertThat(extractor.hasNext(), is(true));
-        Optional<InputStream> stream = extractor.next();
+        DataExtractor.Result result = extractor.next();
+        assertThat(result.searchInterval(), equalTo(new SearchInterval(1000L, 4000L)));
+        Optional<InputStream> stream = result.data();
         assertThat(stream.isPresent(), is(true));
         String expectedStream = """
             {"airline":"a","time":1999,"responsetime":11.0,"doc_count":1} \
@@ -202,7 +200,7 @@ public class CompositeAggregationDataExtractorTests extends ESTestCase {
         extractor.setNextResponse(response);
 
         assertThat(extractor.hasNext(), is(true));
-        assertThat(extractor.next().isPresent(), is(false));
+        assertThat(extractor.next().data().isPresent(), is(false));
         assertThat(extractor.hasNext(), is(false));
 
         assertThat(capturedSearchRequests.size(), equalTo(1));
@@ -215,7 +213,7 @@ public class CompositeAggregationDataExtractorTests extends ESTestCase {
         extractor.setNextResponse(response);
 
         assertThat(extractor.hasNext(), is(true));
-        assertThat(extractor.next().isPresent(), is(false));
+        assertThat(extractor.next().data().isPresent(), is(false));
         assertThat(extractor.hasNext(), is(false));
 
         assertThat(capturedSearchRequests.size(), equalTo(1));
@@ -249,17 +247,13 @@ public class CompositeAggregationDataExtractorTests extends ESTestCase {
 
         TestDataExtractor extractor = new TestDataExtractor(1000L, timestamp + 1000 + 1);
 
-        SearchResponse response = createSearchResponse(
-            "buckets",
-            buckets,
-            MapBuilder.<String, Object>newMapBuilder().put("time_bucket", 1000L).put("airline", "d").map()
-        );
+        SearchResponse response = createSearchResponse("buckets", buckets, Map.of("time_bucket", 1000L, "airline", "d"));
         extractor.setNextResponse(response);
         extractor.cancel();
         // We should have next right now as we have not yet determined if we have handled a page or not
         assertThat(extractor.hasNext(), is(true));
         // Should be empty
-        assertThat(countMatches('{', asString(extractor.next().get())), equalTo(0L));
+        assertThat(countMatches('{', asString(extractor.next().data().get())), equalTo(0L));
         // Determined that we were on the first page and ended
         assertThat(extractor.hasNext(), is(false));
     }
@@ -282,15 +276,11 @@ public class CompositeAggregationDataExtractorTests extends ESTestCase {
 
         TestDataExtractor extractor = new TestDataExtractor(1000L, timestamp + 1000 + 1);
 
-        SearchResponse response = createSearchResponse(
-            "buckets",
-            buckets,
-            MapBuilder.<String, Object>newMapBuilder().put("time_bucket", 1000L).put("airline", "d").map()
-        );
+        SearchResponse response = createSearchResponse("buckets", buckets, Map.of("time_bucket", 1000L, "airline", "d"));
         extractor.setNextResponse(response);
 
         assertThat(extractor.hasNext(), is(true));
-        assertThat(countMatches('{', asString(extractor.next().get())), equalTo(10L));
+        assertThat(countMatches('{', asString(extractor.next().data().get())), equalTo(10L));
         buckets = new ArrayList<>(numBuckets);
         for (int i = 0; i < 6; i++) {
             buckets.add(
@@ -315,17 +305,13 @@ public class CompositeAggregationDataExtractorTests extends ESTestCase {
                 )
             );
         }
-        response = createSearchResponse(
-            "buckets",
-            buckets,
-            MapBuilder.<String, Object>newMapBuilder().put("time_bucket", 3000L).put("airline", "a").map()
-        );
+        response = createSearchResponse("buckets", buckets, Map.of("time_bucket", 3000L, "airline", "a"));
         extractor.setNextResponse(response);
         extractor.cancel();
         assertThat(extractor.hasNext(), is(true));
         assertThat(extractor.isCancelled(), is(true));
         // Only the docs in the previous bucket before cancelling
-        assertThat(countMatches('{', asString(extractor.next().get())), equalTo(6L));
+        assertThat(countMatches('{', asString(extractor.next().data().get())), equalTo(6L));
 
         // Once we have handled the 6 remaining in that time bucket, we shouldn't finish the page and the extractor should end
         assertThat(extractor.hasNext(), is(false));

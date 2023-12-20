@@ -8,7 +8,6 @@ package org.elasticsearch.xpack.ml.action;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-import org.apache.logging.log4j.message.ParameterizedMessage;
 import org.elasticsearch.ElasticsearchStatusException;
 import org.elasticsearch.ResourceNotFoundException;
 import org.elasticsearch.action.ActionListener;
@@ -25,6 +24,7 @@ import org.elasticsearch.cluster.block.ClusterBlockLevel;
 import org.elasticsearch.cluster.metadata.IndexNameExpressionResolver;
 import org.elasticsearch.cluster.service.ClusterService;
 import org.elasticsearch.common.inject.Inject;
+import org.elasticsearch.common.util.concurrent.EsExecutors;
 import org.elasticsearch.core.Nullable;
 import org.elasticsearch.persistent.PersistentTasksCustomMetadata;
 import org.elasticsearch.persistent.PersistentTasksService;
@@ -57,6 +57,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import static org.elasticsearch.core.Strings.format;
 import static org.elasticsearch.xpack.core.ClientHelper.ML_ORIGIN;
 import static org.elasticsearch.xpack.core.ClientHelper.executeAsyncWithOrigin;
 
@@ -103,7 +104,7 @@ public class TransportDeleteJobAction extends AcknowledgedTransportMasterNodeAct
             actionFilters,
             DeleteJobAction.Request::new,
             indexNameExpressionResolver,
-            ThreadPool.Names.SAME
+            EsExecutors.DIRECT_EXECUTOR_SERVICE
         );
         this.client = client;
         this.persistentTasksService = persistentTasksService;
@@ -127,7 +128,7 @@ public class TransportDeleteJobAction extends AcknowledgedTransportMasterNodeAct
         ClusterState state,
         ActionListener<AcknowledgedResponse> listener
     ) {
-        logger.debug(() -> new ParameterizedMessage("[{}] deleting job ", request.getJobId()));
+        logger.debug(() -> "[" + request.getJobId() + "] deleting job ");
 
         if (request.isForce() == false) {
             checkJobIsNotOpen(request.getJobId(), state);
@@ -140,8 +141,8 @@ public class TransportDeleteJobAction extends AcknowledgedTransportMasterNodeAct
         synchronized (listenersByJobId) {
             if (listenersByJobId.containsKey(request.getJobId())) {
                 logger.debug(
-                    () -> new ParameterizedMessage(
-                        "[{}] Deletion task [{}] will wait for existing deletion task to complete",
+                    () -> format(
+                        "[%s] Deletion task [%s] will wait for existing deletion task to complete",
                         request.getJobId(),
                         task.getId()
                     )
@@ -166,13 +167,13 @@ public class TransportDeleteJobAction extends AcknowledgedTransportMasterNodeAct
             }
         );
 
-        ActionListener<PutJobAction.Response> markAsDeletingListener = ActionListener.wrap(response -> {
+        ActionListener<PutJobAction.Response> markAsDeletingListener = finalListener.delegateFailureAndWrap((delegate, response) -> {
             if (request.isForce()) {
-                forceDeleteJob(parentTaskClient, request, state, finalListener);
+                forceDeleteJob(parentTaskClient, request, state, delegate);
             } else {
-                normalDeleteJob(parentTaskClient, request, state, finalListener);
+                normalDeleteJob(parentTaskClient, request, state, delegate);
             }
-        }, finalListener::onFailure);
+        });
 
         ActionListener<AcknowledgedResponse> datafeedDeleteListener = ActionListener.wrap(response -> {
             auditor.info(request.getJobId(), Messages.getMessage(Messages.JOB_AUDIT_DELETING, taskId));
@@ -204,7 +205,7 @@ public class TransportDeleteJobAction extends AcknowledgedTransportMasterNodeAct
 
         // First check that the job exists, because we don't want to audit
         // the beginning of its deletion if it didn't exist in the first place
-        jobConfigProvider.jobExists(request.getJobId(), true, jobExistsListener);
+        jobConfigProvider.jobExists(request.getJobId(), true, null, jobExistsListener);
     }
 
     private void notifyListeners(String jobId, @Nullable AcknowledgedResponse ack, @Nullable Exception error) {
@@ -245,7 +246,7 @@ public class TransportDeleteJobAction extends AcknowledgedTransportMasterNodeAct
     ) {
 
         final String jobId = request.getJobId();
-        logger.debug(() -> new ParameterizedMessage("[{}] force deleting job", jobId));
+        logger.debug(() -> "[" + jobId + "] force deleting job");
 
         // 3. Delete the job
         ActionListener<Boolean> removeTaskListener = ActionListener.wrap(
@@ -279,7 +280,7 @@ public class TransportDeleteJobAction extends AcknowledgedTransportMasterNodeAct
         killProcess(parentTaskClient, jobId, killJobListener);
     }
 
-    private void killProcess(
+    private static void killProcess(
         ParentTaskAssigningClient parentTaskClient,
         String jobId,
         ActionListener<KillProcessAction.Response> listener
@@ -295,11 +296,11 @@ public class TransportDeleteJobAction extends AcknowledgedTransportMasterNodeAct
         if (jobTask == null) {
             listener.onResponse(null);
         } else {
-            persistentTasksService.sendRemoveRequest(jobTask.getId(), listener.delegateFailure((l, task) -> l.onResponse(Boolean.TRUE)));
+            persistentTasksService.sendRemoveRequest(jobTask.getId(), listener.safeMap(task -> true));
         }
     }
 
-    private void checkJobIsNotOpen(String jobId, ClusterState state) {
+    private static void checkJobIsNotOpen(String jobId, ClusterState state) {
         PersistentTasksCustomMetadata tasks = state.metadata().custom(PersistentTasksCustomMetadata.TYPE);
         PersistentTasksCustomMetadata.PersistentTask<?> jobTask = MlTasks.getJobTask(jobId, tasks);
         if (jobTask != null) {
@@ -380,6 +381,6 @@ public class TransportDeleteJobAction extends AcknowledgedTransportMasterNodeAct
             }
         }, listener::onFailure);
 
-        jobConfigProvider.getJob(jobId, jobListener);
+        jobConfigProvider.getJob(jobId, null, jobListener);
     }
 }

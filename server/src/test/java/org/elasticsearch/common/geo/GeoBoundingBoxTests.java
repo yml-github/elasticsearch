@@ -29,10 +29,11 @@ public class GeoBoundingBoxTests extends ESTestCase {
 
     public void testInvalidParseInvalidWKT() throws IOException {
         XContentBuilder bboxBuilder = XContentFactory.jsonBuilder().startObject().field("wkt", "invalid").endObject();
-        XContentParser parser = createParser(bboxBuilder);
-        parser.nextToken();
-        ElasticsearchParseException e = expectThrows(ElasticsearchParseException.class, () -> GeoBoundingBox.parseBoundingBox(parser));
-        assertThat(e.getMessage(), equalTo("failed to parse WKT bounding box"));
+        try (XContentParser parser = createParser(bboxBuilder)) {
+            parser.nextToken();
+            ElasticsearchParseException e = expectThrows(ElasticsearchParseException.class, () -> GeoBoundingBox.parseBoundingBox(parser));
+            assertThat(e.getMessage(), equalTo("failed to parse WKT bounding box"));
+        }
     }
 
     public void testInvalidParsePoint() throws IOException {
@@ -92,20 +93,11 @@ public class GeoBoundingBoxTests extends ESTestCase {
         XContentBuilder builder = XContentFactory.jsonBuilder().startObject();
         for (String field : randomSubsetOf(List.of("top", "bottom", "left", "right"))) {
             switch (field) {
-                case "top":
-                    builder.field("top", geoBoundingBox.top());
-                    break;
-                case "bottom":
-                    builder.field("bottom", geoBoundingBox.bottom());
-                    break;
-                case "left":
-                    builder.field("left", geoBoundingBox.left());
-                    break;
-                case "right":
-                    builder.field("right", geoBoundingBox.right());
-                    break;
-                default:
-                    throw new IllegalStateException("unexpected branching");
+                case "top" -> builder.field("top", geoBoundingBox.top());
+                case "bottom" -> builder.field("bottom", geoBoundingBox.bottom());
+                case "left" -> builder.field("left", geoBoundingBox.left());
+                case "right" -> builder.field("right", geoBoundingBox.right());
+                default -> throw new IllegalStateException("unexpected branching");
             }
         }
         builder.endObject();

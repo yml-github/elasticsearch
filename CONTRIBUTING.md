@@ -1,4 +1,4 @@
-Contributing to elasticsearch
+Contributing to Elasticsearch
 =============================
 
 Elasticsearch is a free and open project and we love to receive contributions from our community — you! There are many ways to contribute, from writing tutorials or blog posts, improving the documentation, submitting bug reports and feature requests or writing code which can be incorporated into Elasticsearch itself.
@@ -54,7 +54,7 @@ The process for contributing to any of the [Elastic repositories](https://github
 ### Fork and clone the repository
 
 You will need to fork the main Elasticsearch code or documentation repository and clone it to your local machine. See
-[github help page](https://help.github.com/articles/fork-a-repo) for help.
+[GitHub help page](https://help.github.com/articles/fork-a-repo) for help.
 
 Further instructions for specific projects are given below.
 
@@ -69,8 +69,8 @@ cycle.
 * Lines that are not part of your change should not be edited (e.g. don't format
   unchanged lines, don't reorder existing imports)
 * Add the appropriate [license headers](#license-headers) to any new files
-* For contributions involving the elasticsearch build you can find (details about the build setup in the
-* [BUILDING](BUILDING.md) file
+* For contributions involving the Elasticsearch build you can find details about the build setup in the
+  [BUILDING](BUILDING.md) file
 
 ### Submitting your changes
 
@@ -87,21 +87,20 @@ Once your changes and tests are ready to submit for review:
 
 3. Rebase your changes
 
-    Update your local repository with the most recent code from the main Elasticsearch repository, and rebase your branch on top of the latest master branch. We prefer your initial changes to be squashed into a single commit. Later, if we ask you to make changes, add them as separate commits.  This makes them easier to review.  As a final step before merging we will either ask you to squash all commits yourself or we'll do it for you.
-
+    Update your local repository with the most recent code from the main Elasticsearch repository, and rebase your branch on top of the latest main branch. We prefer your initial changes to be squashed into a single commit. Later, if we ask you to make changes, add them as separate commits.  This makes them easier to review.  As a final step before merging we will either ask you to squash all commits yourself or we'll do it for you.
 
 4. Submit a pull request
 
     Push your local changes to your forked copy of the repository and [submit a pull request](https://help.github.com/articles/using-pull-requests). In the pull request, choose a title which sums up the changes that you have made, and in the body provide more details about what your changes do. Also mention the number of the issue where discussion has taken place, eg "Closes #123".
 
-Then sit back and wait. There will probably be discussion about the pull request and, if any changes are needed, we would love to work with you to get your pull request merged into Elasticsearch.
+Then sit back and wait. There will probably be discussion about the pull request and, if any changes are needed, we would love to work with you to get your pull request merged into Elasticsearch. A yaml changelog entry will be automatically created, there is no need for external contributors to manually edit it, unless requested by the reviewer.
 
 Please adhere to the general guideline that you should never force push
 to a publicly shared branch. Once you have opened your pull request, you
 should consider your branch publicly shared. Instead of force pushing
 you can just add incremental commits; this is generally easier on your
-reviewers. If you need to pick up changes from master, you can merge
-master into your branch. A reviewer might ask you to rebase a
+reviewers. If you need to pick up changes from main, you can merge
+main into your branch. A reviewer might ask you to rebase a
 long-running pull request in which case force pushing is okay for that
 request. Note that squashing at the end of the review process should
 also not be done, that can be done when the pull request is [integrated
@@ -112,24 +111,16 @@ Contributing to the Elasticsearch codebase
 
 **Repository:** [https://github.com/elastic/elasticsearch](https://github.com/elastic/elasticsearch)
 
-JDK 16 is required to build Elasticsearch. You must have a JDK 16 installation
+JDK 17 is required to build Elasticsearch. You must have a JDK 17 installation
 with the environment variable `JAVA_HOME` referencing the path to Java home for
-your JDK 16 installation. By default, tests use the same runtime as `JAVA_HOME`.
-However, since Elasticsearch supports JDK 11, the build supports compiling with
-JDK 16 and testing on a JDK 11 runtime; to do this, set `RUNTIME_JAVA_HOME`
-pointing to the Java home of a JDK 11 installation. Note that this mechanism can
-be used to test against other JDKs as well, this is not only limited to JDK 11.
-
-> Note: It is also required to have `JAVA8_HOME`, `JAVA11_HOME`, and `JAVA17_HOME`
-available so that the tests can pass.
+your JDK 17 installation.
 
 Elasticsearch uses the Gradle wrapper for its build. You can execute Gradle
 using the wrapper via the `gradlew` script on Unix systems or `gradlew.bat`
 script on Windows in the root of the repository. The examples below show the
 usage on Unix.
 
-We support development in IntelliJ versions IntelliJ 2020.1 and
-onwards and Eclipse 2021-12 and onwards.
+We support development in [IntelliJ IDEA] versions 2020.1 and onwards.
 
 [Docker](https://docs.docker.com/install/) is required for building some Elasticsearch artifacts and executing certain test suites. You can run Elasticsearch without building all the artifacts with:
 
@@ -142,18 +133,28 @@ specifically these lines tell you that Elasticsearch is ready:
     [2020-05-29T14:50:35,167][INFO ][o.e.h.AbstractHttpServerTransport] [runTask-0] publish_address {127.0.0.1:9200}, bound_addresses {[::1]:9200}, {127.0.0.1:9200}
     [2020-05-29T14:50:35,169][INFO ][o.e.n.Node               ] [runTask-0] started
 
-But to be honest its typically easier to wait until the console stops scrolling
+But to be honest it's typically easier to wait until the console stops scrolling
 and then run `curl` in another window like this:
 
     curl -u elastic:password localhost:9200
 
+To send requests to this Elasticsearch instance, either use the built-in `elastic`
+user and password as above or use the pre-configured `elastic-admin` user:
+
+    curl -u elastic-admin:elastic-password localhost:9200
+
+Security can also be disabled altogether:
+
+    ./gradlew :run -Dtests.es.xpack.security.enabled=false
+
+The definition of this Elasticsearch cluster can be found [here](build-tools-internal/src/main/groovy/elasticsearch.run.gradle).
 
 ### Importing the project into IntelliJ IDEA
 
-The minimum IntelliJ IDEA version required to import the Elasticsearch project is 2020.1
-Elasticsearch builds using Java 16. When importing into IntelliJ you will need
+The minimum IntelliJ IDEA version required to import the Elasticsearch project is 2020.1.
+Elasticsearch builds using Java 17. When importing into IntelliJ you will need
 to define an appropriate SDK. The convention is that **this SDK should be named
-"16"** so that the project import will detect it automatically. For more details
+"17"** so that the project import will detect it automatically. For more details
 on defining an SDK in IntelliJ please refer to [their documentation](https://www.jetbrains.com/help/idea/sdk.html#define-sdk).
 SDK definitions are global, so you can add the JDK from any project, or after
 project import. Importing with a missing JDK will still work, IntelliJ will
@@ -180,13 +181,12 @@ action is required.
 
 #### Formatting
 
-We are in the process of migrating towards automatic formatting Java file
-using [spotless], backed by the Eclipse formatter. **We strongly recommend
-installing using the [Eclipse Code Formatter] plugin** so that you can
-apply the correct formatting directly in IntelliJ.  The configuration for
-the plugin is held in `.idea/eclipseCodeFormatter.xml` and should be
-automatically applied, but manual instructions are below in case you you
-need them.
+Elasticsearch code is automatically formatted with [Spotless], backed by the
+Eclipse formatter. You can do the same in IntelliJ with the
+[Eclipse Code Formatter] so that you can apply the correct formatting directly in
+your IDE.  The configuration for the plugin is held in
+`.idea/eclipseCodeFormatter.xml` and should be automatically applied, but manual
+instructions are below in case you need them.
 
    1. Open **Preferences > Other Settings > Eclipse Code Formatter**
    2. Click "Use the Eclipse Code Formatter"
@@ -195,62 +195,18 @@ need them.
    4. Click "Browse", and navigate to the file `build-conventions/formatterConfig.xml`
    5. **IMPORTANT** - make sure "Optimize Imports" is **NOT** selected.
    6. Click "OK"
+   7. Optional: If you like to format code changes on save automatically, open
+      **Preferences > Tools > Actions on Save** and check "Reformat Code", making sure to
+      configure Java files.
 
-Note that only some sub-projects in the Elasticsearch project are currently
-fully-formatted. You can see a list of project that **are not**
-automatically formatted in
-[FormattingPrecommitPlugin.java](build-conventions/src/main/java/org/elasticsearch/gradle/internal/conventions/precommit/FormattingPrecommitPlugin.java).
+Alternative manual steps for IntelliJ.
 
-### Importing the project into Eclipse
+   1. Open **File > Settings/Preferences > Code Style > Java**
+   2. Gear icon > Import Scheme > Eclipse XML Profile
+   3. Navigate to the file `build-conventions/formatterConfig.xml`
+   4. Click "OK"
 
-Elasticsearch builds using Gradle and Java 17. You'll need to point
-[eclipse.ini](https://wiki.eclipse.org/Eclipse.ini)'s `-vm` to Java 17.
-
- - Select **File > Import...**
- - Select **Existing Gradle Project**
- - Select **Next** then **Next** again
- - Set the **Project root directory** to the root of your elasticsearch clone
- - Click **Finish**
-
-This will spin for a long, long time but you'll see many errors about circular
-dependencies. Fix them:
-
- - Select **Window > Preferences**
- - Select **Java > Compiler > Building**
- - Look under **Build Path Problems**
- - Set **Circular dependencies** to **Warning**
- - Apply that and let the build spin away for a while
-
-Next you'll want to import our auto-formatter:
-
- - Select **Window > Preferences**
- - Select **Java > Code Style > Formatter**
- - Click **Import**
- - Import the file at **build-conventions/formatterConfig.xml**
- - Make sure it is the **Active profile**
-
-Finally, set up import order:
-
- - Select **Window > Preferences**
- - Select **Java > Code Style > Organize Imports**
- - Click **Import...**
- - Import the file at **build-conventions/elastic.importorder**
- - Set the **Number of imports needed for `.*`** to ***9999***
- - Set the **Number of static imports needed for `.*`** to ***9999*** as well
- - Apply that
-
-IMPORTANT: There is an option in **Gradle** for **Automatic Project Synchronization**.
-           As convenient as it'd be for the projects to always be perfect this
-           tends to add many many seconds to every branch change. Instead, you
-           should manually right click on a project and
-           **Gradle > Refresh Gradle Project** if the configuration is out of
-           date.
-
-As we add more subprojects you might have to re-import the gradle project (the
-first step) again. There is no need to blow away the existing projects before
-doing that.
-
-### REST Endpoint Conventions
+### REST endpoint conventions
 
 Elasticsearch typically uses singular nouns rather than plurals in URLs.
 For example:
@@ -266,7 +222,7 @@ but not:
 You may find counterexamples, but new endpoints should use the singular
 form.
 
-### Java Language Formatting Guidelines
+### Java language formatting guidelines
 
 Java files in the Elasticsearch codebase are automatically formatted using
 the [Spotless Gradle] plugin. All new projects are automatically formatted,
@@ -301,20 +257,20 @@ Please follow these formatting guidelines:
   only do this where the benefit clearly outweighs the decrease in formatting
   consistency.
 * Note that Javadoc and block comments i.e. `/* ... */` are not formatted,
-  but line comments i.e `// ...` are.
+  but line comments i.e. `// ...` are.
 * Negative boolean expressions must use the form `foo == false` instead of
   `!foo` for better readability of the code. This is enforced via
   Checkstyle. Conversely, you should not write e.g. `if (foo == true)`, but
   just `if (foo)`.
 
-#### Editor / IDE Support
+#### Editor / IDE support
 
 IntelliJ IDEs can
 [import](https://blog.jetbrains.com/idea/2014/01/intellij-idea-13-importing-code-formatter-settings-from-eclipse/)
 the same settings file, and / or use the [Eclipse Code Formatter] plugin.
 
 You can also tell Spotless to [format a specific
-file](https://github.com/diffplug/spotless/tree/master/plugin-gradle#can-i-apply-spotless-to-specific-files)
+file](https://github.com/diffplug/spotless/tree/main/plugin-gradle#can-i-apply-spotless-to-specific-files)
 from the command line.
 
 ### Javadoc
@@ -368,7 +324,7 @@ is to be helpful, not to turn writing code into a chore.
       this is critical to understanding the code e.g. documenting the
       subtleties of the implementation of a private method. The point here
       is that implementations will change over time, and the Javadoc is
-      less likely to become out-of-date if it only talks about the what is
+      less likely to become out-of-date if it only talks about
       the purpose of the code, not what it does.
    8. Examples in Javadoc can be very useful, so feel free to add some if
       you can reasonably do so i.e. if it takes a whole page of code to set
@@ -414,7 +370,7 @@ Finally, use your judgement! Base your decisions on what will help other
 developers - including yourself, when you come back to some code
 3 months in the future, having forgotten how it works.
 
-### License Headers
+### License headers
 
 We require license headers on all Java files. With the exception of the
 top-level `x-pack` directory, all contributed code should have the following
@@ -465,7 +421,291 @@ the [`Types.forciblyCast`](libs/core/src/main/java/org/elasticsearch/core/Types.
 utility method. As the name suggests, you can coerce any type to any other type,
 so please use it as a last resort.
 
-### Creating A Distribution
+### Logging
+
+The Elasticsearch server logs are vitally useful for diagnosing problems in a
+running cluster. You should make sure that your contribution uses logging
+appropriately: log enough detail to inform users about key events and help them
+understand what happened when things go wrong without logging so much detail
+that the logs fill up with noise and the useful signal is lost.
+
+Elasticsearch uses Log4J for logging. In most cases you should log via a
+`Logger` named after the class that is writing the log messages, which you can
+do by declaring a static field of the class. For example:
+
+    class Foo {
+        private static final Logger logger = LogManager.getLogger(Foo.class);
+    }
+
+In rare situations you may want to configure your `Logger` slightly
+differently, perhaps specifying a different class or maybe using one of the
+methods on `org.elasticsearch.common.logging.Loggers` instead.
+
+If the log message includes values from your code then you must use
+placeholders rather than constructing the string yourself using simple
+concatenation. Consider wrapping the values in `[...]` to help distinguish them
+from the static part of the message:
+
+    logger.debug("operation failed [{}] times in [{}]ms", failureCount, elapsedMillis);
+
+You can also pass in an exception to log it including its stack trace, and any
+causes and their causes, as well as any suppressed exceptions and so on:
+
+    logger.debug("operation failed", exception);
+
+If you wish to use placeholders and an exception at the same time, construct a
+`Supplier<String>` and use `org.elasticsearch.core.Strings.format`
+- note java.util.Formatter syntax
+
+    logger.debug(() -> Strings.format("failed at offset [%s]", offset), exception);
+
+You can also use a `java.util.Supplier<String>` to avoid constructing
+expensive messages that will usually be discarded:
+
+    logger.debug(() -> "rarely seen output [" + expensiveMethod() + "]");
+
+Logging is an important behaviour of the system and sometimes deserves its own
+unit tests, especially if there is complex logic for computing what is logged
+and when to log it. You can use a `org.elasticsearch.test.MockLogAppender` to
+make assertions about the logs that are being emitted.
+
+Logging is a powerful diagnostic technique, but it is not the only possibility.
+You should also consider exposing some information about your component via an
+API instead of in logs. For instance, you can implement APIs to report its
+current status, various statistics, and maybe even details of recent failures.
+
+#### Log levels
+
+Each log message is written at a particular _level_. By default, Elasticsearch
+will suppress messages at the two most verbose levels, `TRACE` and `DEBUG`, and
+will output messages at all other levels. Users can configure which levels of
+message are written by each logger at runtime, but you should expect everyone
+to run with the default configuration almost all the time and choose your
+levels accordingly.
+
+The guidance in this section is subjective in some areas. When in doubt,
+discuss your choices with reviewers.
+
+##### `TRACE`
+
+This is the most verbose level, disabled by default, and it is acceptable if it
+generates a very high volume of logs. The target audience of `TRACE` logs
+comprises developers who are trying to deeply understand some unusual runtime
+behaviour of a system. For instance `TRACE` logs may be useful when
+understanding an unexpected interleaving of concurrent actions or some
+unexpected consequences of a delayed response from a remote node.
+
+`TRACE` logs will normally only make sense when read alongside the code, and
+typically they will be read as a whole sequence of messages rather than in
+isolation. For example, the `InternalClusterInfoService` uses `TRACE` logs to
+record certain key events in its periodic refresh process:
+
+    logger.trace("starting async refresh");
+    // ...
+    logger.trace("received node stats response");
+    // ...
+    logger.trace("received indices stats response");
+    // ...
+    logger.trace("stats all received, computing cluster info and notifying listeners");
+    // ...
+    logger.trace("notifying [{}] of new cluster info", listener);
+
+Even though `TRACE` logs may be very verbose, you should still exercise some
+judgement when deciding when to use them. In many cases it will be easier to
+understand the behaviour of the system using tests or by analysing the code
+itself rather than by trawling through hundreds of trivial log messages.
+
+It may not be easy, or even possible, to obtain `TRACE` logs from a production
+system. Therefore they are not appropriate for information that you would
+normally expect to be useful in diagnosing problems in production.
+
+##### `DEBUG`
+
+This is the next least verbose level and is also disabled by default. The
+target audience of this level typically comprises users or developers who are
+trying to diagnose an unexpected problem in a production system, perhaps to
+help determine whether a fault lies within Elasticsearch or elsewhere.
+
+Users should expect to be able to enable `DEBUG` logging on their production
+systems for a whole subsystem for an extended period of time without
+overwhelming the system or filling up their disks with logs, so it is important
+to limit the volume of messages logged at this level. On the other hand, these
+messages must still provide enough detail to diagnose the sorts of problems
+that you expect Elasticsearch to encounter. In some cases it works well to
+collect information over a period of time and then log a complete summary,
+rather than recording every step of a process in its own message.
+
+For example, the `Coordinator` uses `DEBUG` logs to record a change in mode,
+including various internal details for context, because this event is fairly
+rare but not important enough to notify users by default:
+
+    logger.debug(
+        "{}: coordinator becoming CANDIDATE in term {} (was {}, lastKnownLeader was [{}])",
+        method,
+        getCurrentTerm(),
+        mode,
+        lastKnownLeader
+    );
+
+It's possible that the reader of `DEBUG` logs is also reading the code, but
+that is less likely than for `TRACE` logs. Strive to avoid terminology that
+only makes sense when reading the code, and also aim for messages at this level
+to be self-contained rather than intending them to be read as a sequence.
+
+It's often useful to log exceptions and other deviations from the "happy path"
+at `DEBUG` level. Exceptions logged at `DEBUG` should generally include the
+complete stack trace.
+
+##### `INFO`
+
+This is the next least verbose level, and the first level that is enabled by
+default. It is appropriate for recording important events in the life of the
+cluster, such as an index being created or deleted or a snapshot starting or
+completing. Users will mostly ignore log messages at `INFO` level, but may use
+these messages to construct a high-level timeline of events leading up to an
+incident.
+
+For example, the `MetadataIndexTemplateService` uses `INFO` logs to record when
+an index template is created or updated:
+
+    logger.info(
+        "{} index template [{}] for index patterns {}",
+        existing == null ? "adding" : "updating",
+        name,
+        template.indexPatterns()
+    );
+
+`INFO`-level logging is enabled by default so its target audience is the
+general population of users and administrators. You should use user-facing
+terminology and ensure that messages at this level are self-contained. In
+general, you shouldn't log unusual events, particularly exceptions with stack
+traces, at `INFO` level. If the event is relatively benign then use `DEBUG`,
+whereas if the user should be notified then use `WARN`.
+
+Bear in mind that users will be reading the logs when they're trying to
+determine why their node is not behaving the way they expect. If a log message
+sounds like an error then some users will interpret it as one, even if it is
+logged at `INFO` level. Where possible, `INFO` messages should prefer factual
+over judgemental language, for instance saying `Did not find ...` rather than
+`Failed to find ...`.
+
+##### `WARN`
+
+This is the next least verbose level, and is also enabled by default. Ideally a
+healthy cluster will emit no `WARN`-level logs, but this is the appropriate
+level for recording events that the cluster administrator should investigate,
+or which indicate a bug. Some production environments require the cluster to
+emit no `WARN`-level logs during acceptance testing, so you must ensure that
+any logs at this level really do indicate a problem that needs addressing.
+
+As with the `INFO` level, you should use user-facing terminology at the `WARN`
+level, and also ensure that messages are self-contained. Strive to make them
+actionable too since you should be logging at this level when the user should
+take some investigative action.
+
+For example, the `DiskThresholdMonitor` uses `WARN` logs to record that a disk
+threshold has been breached:
+
+    logger.warn(
+        "flood stage disk watermark [{}] exceeded on {}, all indices on this node will be marked read-only",
+        diskThresholdSettings.describeFloodStageThreshold(total, false),
+        usage
+    );
+
+Unlike at the `INFO` level, it is often appropriate to log an exception,
+complete with stack trace, at `WARN` level. Although the stack trace may not be
+useful to the user, it may contain information that is vital for a developer to
+fully understand the problem and its wider context.
+
+In a situation where occasional transient failures are expected and handled,
+but a persistent failure requires the user's attention, consider implementing a
+mechanism to detect that a failure is unacceptably persistent and emit a
+corresponding `WARN` log. For example, it may be helpful to log every tenth
+consecutive failure at `WARN` level, or log at `WARN` if an operation has not
+completed within a certain time limit. This is much more user-friendly than
+failing persistently and silently by default and requiring the user to enable
+`DEBUG` logging to investigate the problem.
+
+If an exception occurs as a direct result of a request received from a client
+then it should only be logged as a `WARN` if the server administrator is the
+right person to address it. In most cases the server administrator cannot do
+anything about faulty client requests, and the person running the client is
+often unable to see the server logs, so you should include the exception in the
+response back to the client and not log a warning. Bear in mind that clients
+may submit requests at a high rate, so any per-request logging can easily flood
+the logs.
+
+##### `ERROR`
+
+This is the next least verbose level after `WARN`. In theory, it is possible for
+users to suppress messages at `WARN` and below, believing this to help them
+focus on the most important `ERROR` messages, but in practice in Elasticsearch
+this will hide so much useful information that the resulting logs will be
+useless, so we do not expect users to do this kind of filtering.
+
+On the other hand, users may be familiar with the `ERROR` level from elsewhere.
+Log4J for instance documents this level as meaning "an error in the
+application, possibly recoverable". The implication here is that the error is
+possibly _not_ recoverable too, and we do encounter users that get very worried
+by logs at `ERROR` level for this reason.
+
+Therefore you should try and avoid logging at `ERROR` level unless the error
+really does indicate that Elasticsearch is now running in a degraded state from
+which it will not recover. For instance, the `FsHealthService` uses `ERROR`
+logs to record that the data path failed some basic health checks and hence the
+node cannot continue to operate as a member of the cluster:
+
+    logger.error(() -> "health check of [" + path + "] failed", ex);
+
+Errors like this should be very rare. When in doubt, prefer `WARN` to `ERROR`.
+
+### Version numbers in the Elasticsearch codebase
+
+Starting in 8.8.0, we have separated out the version number representations
+of various aspects of Elasticsearch into their own classes, using their own
+numbering scheme separate to release version. The main ones are
+`TransportVersion` and `IndexVersion`, representing the version of the
+inter-node binary protocol and index data + metadata respectively.
+
+Separated version numbers are comprised of an integer number. The semantic
+meaning of a version number are defined within each `*Version` class.  There
+is no direct mapping between separated version numbers and the release version.
+The versions used by any particular instance of Elasticsearch can be obtained
+by querying `/_nodes/info` on the node.
+
+#### Using separated version numbers
+
+Whenever a change is made to a component versioned using a separated version
+number, there are a few rules that need to be followed:
+
+1. Each version number represents a specific modification to that component,
+   and should not be modified once it is defined. Each version is immutable
+   once merged into `main`.
+2. To create a new component version, add a new constant to the respective class
+   with a descriptive name of the change being made. Increment the integer
+   number according to the particular `*Version` class.
+
+If your pull request has a conflict around your new version constant,
+you need to update your PR from `main` and change your PR to use the next
+available version number.
+
+### Checking for cluster features
+
+As part of developing a new feature or change, you might need to determine
+if all nodes in a cluster have been upgraded to support your new feature.
+This can be done using `FeatureService`. To define and check for a new
+feature in a cluster:
+
+1. Define a new `NodeFeature` constant with a unique id for the feature
+   in a class related to the change you're doing.
+2. Return that constant from an instance of `FeatureSpecification.getFeatures`,
+   either an existing implementation or a new implementation. Make sure
+   the implementation is added as an SPI implementation in `module-info.java`
+   and `META-INF/services`.
+3. To check if all nodes in the cluster support the new feature, call
+`FeatureService.clusterHasFeature(ClusterState, NodeFeature)`
+
+### Creating a distribution
 
 Run all build commands from within the root directory:
 
@@ -495,7 +735,7 @@ The archive distributions (tar and zip) can be found under:
 
     ./distribution/archives/(darwin-tar|linux-tar|windows-zip|oss-darwin-tar|oss-linux-tar|oss-windows-zip)/build/distributions/
 
-### Running The Full Test Suite
+### Running the full test suite
 
 Before submitting your changes, run the test suite to make sure that nothing is broken, with:
 
@@ -506,7 +746,28 @@ If your changes affect only the documentation, run:
     ./gradlew -p docs check
 
 For more information about testing code examples in the documentation, see
-https://github.com/elastic/elasticsearch/blob/master/docs/README.asciidoc
+https://github.com/elastic/elasticsearch/blob/main/docs/README.asciidoc
+
+### Only running failed tests
+
+When you open your pull-request it may be approved for review. If so, the full
+test suite is run within Elasticsearch's CI environment. If a test fails,
+you can see how to run that particular test by searching for the `REPRODUCE`
+string in the CI's console output.
+
+Elasticsearch's testing suite takes advantage of randomized testing. Consequently,
+a test that passes locally, may actually fail later due to random settings
+or data input. To make tests repeatable, a `REPRODUCE` line in CI will also include
+the `-Dtests.seed` parameter.
+
+When running locally, Gradle does its best to take advantage of cached results.
+So, if the code is unchanged, running the same test with the same `-Dtests.seed`
+repeatedly may not actually run the test if it has passed with that seed
+ in the previous execution. A way around this is to pass a separate parameter
+to adjust the command options seen by Gradle.
+A simple option may be to add the parameter `-Dtests.timestamp=$(date +%s)`
+which will give the current time stamp as a parameter, thus making the parameters
+sent to Gradle unique and bypassing the cache.
 
 ### Project layout
 
@@ -523,9 +784,9 @@ Builds our tar and zip archives and our rpm and deb packages.
 Libraries used to build other parts of the project. These are meant to be
 internal rather than general purpose. We have no plans to
 [semver](https://semver.org/) their APIs or accept feature requests for them.
-We publish them to maven central because they are dependencies of our plugin
-test framework, high level rest client, and jdbc driver but they really aren't
-general purpose enough to *belong* in maven central. We're still working out
+We publish them to Maven Central because they are dependencies of our plugin
+test framework, high level rest client, and jdbc driver, but they really aren't
+general purpose enough to *belong* in Maven Central. We're still working out
 what to do here.
 
 #### `modules`
@@ -536,7 +797,7 @@ they depend on libraries that we don't believe *all* of Elasticsearch should
 depend on.
 
 For example, reindex requires the `connect` permission so it can perform
-reindex-from-remote but we don't believe that the *all* of Elasticsearch should
+reindex-from-remote, but we don't believe that the *all* of Elasticsearch should
 have the "connect". For another example, Painless is implemented using antlr4
 and asm and we don't believe that *all* of Elasticsearch should have access to
 them.
@@ -575,7 +836,7 @@ qa project, open a PR and be ready to discuss options.
 
 #### `server`
 The server component of Elasticsearch that contains all of the modules and
-plugins. Right now things like the high level rest client depend on the server
+plugins. Right now things like the high level rest client depend on the server,
 but we'd like to fix that in the future.
 
 #### `test`
@@ -595,7 +856,7 @@ the `qa` subdirectory functions just like the top level `qa` subdirectory. The
 `plugin` subdirectory contains the x-pack module which runs inside the
 Elasticsearch process.
 
-### Gradle Build
+### Gradle build
 
 We use Gradle to build Elasticsearch because it is flexible enough to not only
 build and package Elasticsearch, but also orchestrate all of the ways that we
@@ -612,16 +873,20 @@ common configurations in our build and how we use them:
 at compile and runtime but are not exposed as a compile dependency to other dependent projects.
 Dependencies added to the `implementation` configuration are considered an implementation detail
 that can be changed at a later date without affecting any dependent projects.</dd>
+
 <dt>`api`</dt><dd>Dependencies that are used as compile and runtime dependencies of a project
- and are considered part of the external api of the project.
+ and are considered part of the external api of the project.</dd>
+
 <dt>`runtimeOnly`</dt><dd>Dependencies that not on the classpath at compile time but
 are on the classpath at runtime. We mostly use this configuration to make sure that
 we do not accidentally compile against dependencies of our dependencies also
 known as "transitive" dependencies".</dd>
+
 <dt>`compileOnly`</dt><dd>Code that is on the classpath at compile time but that
 should not be shipped with the project because it is "provided" by the runtime
 somehow. Elasticsearch plugins use this configuration to include dependencies
 that are bundled with Elasticsearch's server.</dd>
+
 <dt>`testImplementation`</dt><dd>Code that is on the classpath for compiling tests
 that are part of this project but not production code. The canonical example
 of this is `junit`.</dd>
@@ -644,7 +909,7 @@ time is very limited. In some cases the time we would need to spend on reviews
 would outweigh the benefits of a change by preventing us from working on other
 more beneficial changes instead.
 
-Please discuss your change in a Github issue before spending much time on its
+Please discuss your change in a GitHub issue before spending much time on its
 implementation. We sometimes have to reject contributions that duplicate other
 efforts, take the wrong approach to solving a problem, or solve a problem which
 does not need solving. An up-front discussion often saves a good deal of wasted
@@ -655,6 +920,17 @@ refactorings or otherwise "tidy up" certain aspects of the code. We think the
 benefits of this kind of change are very small, and in our experience it is not
 worth investing the substantial effort needed to review them. This especially
 includes changes suggested by tools.
+
+We normally immediately reject PRs which target platforms or system
+configurations that are not in the [official support
+matrix](https://www.elastic.co/support/matrix). We choose to support particular
+platforms with care because we must work to ensure that every Elasticsearch
+release works completely on every platform, and we must spend time
+investigating test failures and performance regressions there too. We cannot
+determine whether PRs which target unsupported platforms or configurations meet
+our quality standards, nor can we guarantee that the change they introduce will
+continue to work in future releases. We do not want Elasticsearch to suddenly
+stop working on a particular platform after an upgrade.
 
 We sometimes reject contributions due to the low quality of the submission
 since low-quality submissions tend to take unreasonable effort to review
@@ -716,8 +992,8 @@ Finally, we require that you run `./gradlew check` before submitting a
 non-documentation contribution. This is mentioned above, but it is worth
 repeating in this section because it has come up in this context.
 
-[intellij]: https://blog.jetbrains.com/idea/2017/07/intellij-idea-2017-2-is-here-smart-sleek-and-snappy/
+[IntelliJ IDEA]: https://www.jetbrains.com/idea/
 [Checkstyle]: https://plugins.jetbrains.com/plugin/1065-checkstyle-idea
-[spotless]: https://github.com/diffplug/spotless
+[Spotless]: https://github.com/diffplug/spotless
 [Eclipse Code Formatter]: https://plugins.jetbrains.com/plugin/6546-eclipse-code-formatter
-[Spotless Gradle]: https://github.com/diffplug/spotless/tree/master/plugin-gradle
+[Spotless Gradle]: https://github.com/diffplug/spotless/tree/main/plugin-gradle

@@ -7,13 +7,14 @@
 package org.elasticsearch.xpack.core.ml.job.config;
 
 import org.elasticsearch.ResourceAlreadyExistsException;
-import org.elasticsearch.Version;
 import org.elasticsearch.action.support.IndicesOptions;
-import org.elasticsearch.cluster.AbstractDiffable;
+import org.elasticsearch.cluster.SimpleDiffable;
 import org.elasticsearch.common.Strings;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
 import org.elasticsearch.common.io.stream.Writeable;
+import org.elasticsearch.common.logging.DeprecationCategory;
+import org.elasticsearch.common.logging.DeprecationLogger;
 import org.elasticsearch.common.unit.ByteSizeValue;
 import org.elasticsearch.core.Nullable;
 import org.elasticsearch.core.TimeValue;
@@ -23,6 +24,7 @@ import org.elasticsearch.xcontent.ParseField;
 import org.elasticsearch.xcontent.ToXContentObject;
 import org.elasticsearch.xcontent.XContentBuilder;
 import org.elasticsearch.xpack.core.common.time.TimeUtils;
+import org.elasticsearch.xpack.core.ml.MlConfigVersion;
 import org.elasticsearch.xpack.core.ml.datafeed.DatafeedConfig;
 import org.elasticsearch.xpack.core.ml.job.messages.Messages;
 import org.elasticsearch.xpack.core.ml.job.persistence.AnomalyDetectorsIndexFields;
@@ -56,11 +58,13 @@ import static org.elasticsearch.xpack.core.ml.utils.ToXContentParams.EXCLUDE_GEN
  * data time fields are {@code null} until the job has seen some data or it is
  * finished respectively.
  */
-public class Job extends AbstractDiffable<Job> implements Writeable, ToXContentObject {
+public class Job implements SimpleDiffable<Job>, Writeable, ToXContentObject {
 
     public static final String TYPE = "job";
 
     public static final String ANOMALY_DETECTOR_JOB_TYPE = "anomaly_detector";
+
+    private static final DeprecationLogger deprecationLogger = DeprecationLogger.getLogger(Job.class);
 
     /*
      * Field names used in serialization
@@ -183,7 +187,7 @@ public class Job extends AbstractDiffable<Job> implements Writeable, ToXContentO
      * Will be null for versions before 5.5.
      */
     @Nullable
-    private final Version jobVersion;
+    private final MlConfigVersion jobVersion;
 
     private final List<String> groups;
     private final String description;
@@ -201,7 +205,7 @@ public class Job extends AbstractDiffable<Job> implements Writeable, ToXContentO
     private final Long resultsRetentionDays;
     private final Map<String, Object> customSettings;
     private final String modelSnapshotId;
-    private final Version modelSnapshotMinVersion;
+    private final MlConfigVersion modelSnapshotMinVersion;
     private final String resultsIndexName;
     private final boolean deleting;
     private final boolean allowLazyOpen;
@@ -211,7 +215,7 @@ public class Job extends AbstractDiffable<Job> implements Writeable, ToXContentO
     private Job(
         String jobId,
         String jobType,
-        Version jobVersion,
+        MlConfigVersion jobVersion,
         List<String> groups,
         String description,
         Date createTime,
@@ -227,7 +231,7 @@ public class Job extends AbstractDiffable<Job> implements Writeable, ToXContentO
         Long resultsRetentionDays,
         Map<String, Object> customSettings,
         String modelSnapshotId,
-        Version modelSnapshotMinVersion,
+        MlConfigVersion modelSnapshotMinVersion,
         String resultsIndexName,
         boolean deleting,
         boolean allowLazyOpen,
@@ -273,8 +277,8 @@ public class Job extends AbstractDiffable<Job> implements Writeable, ToXContentO
     public Job(StreamInput in) throws IOException {
         jobId = in.readString();
         jobType = in.readString();
-        jobVersion = in.readBoolean() ? Version.readVersion(in) : null;
-        groups = Collections.unmodifiableList(in.readStringList());
+        jobVersion = in.readBoolean() ? MlConfigVersion.readVersion(in) : null;
+        groups = in.readCollectionAsImmutableList(StreamInput::readString);
         description = in.readOptionalString();
         createTime = new Date(in.readVLong());
         finishedTime = in.readBoolean() ? new Date(in.readVLong()) : null;
@@ -291,7 +295,7 @@ public class Job extends AbstractDiffable<Job> implements Writeable, ToXContentO
         customSettings = readCustomSettings == null ? null : Collections.unmodifiableMap(readCustomSettings);
         modelSnapshotId = in.readOptionalString();
         if (in.readBoolean()) {
-            modelSnapshotMinVersion = Version.readVersion(in);
+            modelSnapshotMinVersion = MlConfigVersion.readVersion(in);
         } else {
             modelSnapshotMinVersion = null;
         }
@@ -342,7 +346,7 @@ public class Job extends AbstractDiffable<Job> implements Writeable, ToXContentO
         return jobType;
     }
 
-    public Version getJobVersion() {
+    public MlConfigVersion getJobVersion() {
         return jobVersion;
     }
 
@@ -473,7 +477,7 @@ public class Job extends AbstractDiffable<Job> implements Writeable, ToXContentO
         return modelSnapshotId;
     }
 
-    public Version getModelSnapshotMinVersion() {
+    public MlConfigVersion getModelSnapshotMinVersion() {
         return modelSnapshotMinVersion;
     }
 
@@ -547,7 +551,7 @@ public class Job extends AbstractDiffable<Job> implements Writeable, ToXContentO
         out.writeString(jobType);
         if (jobVersion != null) {
             out.writeBoolean(true);
-            Version.writeVersion(jobVersion, out);
+            MlConfigVersion.writeVersion(jobVersion, out);
         } else {
             out.writeBoolean(false);
         }
@@ -569,11 +573,11 @@ public class Job extends AbstractDiffable<Job> implements Writeable, ToXContentO
         out.writeOptionalLong(modelSnapshotRetentionDays);
         out.writeOptionalLong(dailyModelSnapshotRetentionAfterDays);
         out.writeOptionalLong(resultsRetentionDays);
-        out.writeMap(customSettings);
+        out.writeGenericMap(customSettings);
         out.writeOptionalString(modelSnapshotId);
         if (modelSnapshotMinVersion != null) {
             out.writeBoolean(true);
-            Version.writeVersion(modelSnapshotMinVersion, out);
+            MlConfigVersion.writeVersion(modelSnapshotMinVersion, out);
         } else {
             out.writeBoolean(false);
         }
@@ -752,11 +756,11 @@ public class Job extends AbstractDiffable<Job> implements Writeable, ToXContentO
     }
 
     /**
-     * Returns the job types that are compatible with a node running on {@code nodeVersion}
-     * @param nodeVersion the version of the node
+     * Returns the job types that are compatible with a node with {@code mlConfigVersion}
+     * @param mlConfigVersion the version ML configuration in use
      * @return the compatible job types
      */
-    public static Set<String> getCompatibleJobTypes(Version nodeVersion) {
+    public static Set<String> getCompatibleJobTypes(MlConfigVersion mlConfigVersion) {
         Set<String> compatibleTypes = new HashSet<>();
         compatibleTypes.add(ANOMALY_DETECTOR_JOB_TYPE);
         return compatibleTypes;
@@ -766,7 +770,7 @@ public class Job extends AbstractDiffable<Job> implements Writeable, ToXContentO
 
         private String id;
         private String jobType = ANOMALY_DETECTOR_JOB_TYPE;
-        private Version jobVersion;
+        private MlConfigVersion jobVersion;
         private List<String> groups = Collections.emptyList();
         private String description;
         private AnalysisConfig analysisConfig;
@@ -782,7 +786,7 @@ public class Job extends AbstractDiffable<Job> implements Writeable, ToXContentO
         private Long resultsRetentionDays;
         private Map<String, Object> customSettings;
         private String modelSnapshotId;
-        private Version modelSnapshotMinVersion;
+        private MlConfigVersion modelSnapshotMinVersion;
         private String resultsIndexName;
         private boolean deleting;
         private boolean allowLazyOpen;
@@ -825,8 +829,8 @@ public class Job extends AbstractDiffable<Job> implements Writeable, ToXContentO
         public Builder(StreamInput in) throws IOException {
             id = in.readOptionalString();
             jobType = in.readString();
-            jobVersion = in.readBoolean() ? Version.readVersion(in) : null;
-            groups = in.readStringList();
+            jobVersion = in.readBoolean() ? MlConfigVersion.readVersion(in) : null;
+            groups = in.readStringCollectionAsList();
             description = in.readOptionalString();
             createTime = in.readBoolean() ? new Date(in.readVLong()) : null;
             finishedTime = in.readBoolean() ? new Date(in.readVLong()) : null;
@@ -842,7 +846,7 @@ public class Job extends AbstractDiffable<Job> implements Writeable, ToXContentO
             customSettings = in.readMap();
             modelSnapshotId = in.readOptionalString();
             if (in.readBoolean()) {
-                modelSnapshotMinVersion = Version.readVersion(in);
+                modelSnapshotMinVersion = MlConfigVersion.readVersion(in);
             } else {
                 modelSnapshotMinVersion = null;
             }
@@ -862,12 +866,12 @@ public class Job extends AbstractDiffable<Job> implements Writeable, ToXContentO
             return id;
         }
 
-        public void setJobVersion(Version jobVersion) {
+        public void setJobVersion(MlConfigVersion jobVersion) {
             this.jobVersion = jobVersion;
         }
 
         private void setJobVersion(String jobVersion) {
-            this.jobVersion = Version.fromString(jobVersion);
+            this.jobVersion = MlConfigVersion.fromString(jobVersion);
         }
 
         private void setJobType(String jobType) {
@@ -960,13 +964,13 @@ public class Job extends AbstractDiffable<Job> implements Writeable, ToXContentO
             return this;
         }
 
-        public Builder setModelSnapshotMinVersion(Version modelSnapshotMinVersion) {
+        public Builder setModelSnapshotMinVersion(MlConfigVersion modelSnapshotMinVersion) {
             this.modelSnapshotMinVersion = modelSnapshotMinVersion;
             return this;
         }
 
         Builder setModelSnapshotMinVersion(String modelSnapshotMinVersion) {
-            this.modelSnapshotMinVersion = Version.fromString(modelSnapshotMinVersion);
+            this.modelSnapshotMinVersion = MlConfigVersion.fromString(modelSnapshotMinVersion);
             return this;
         }
 
@@ -1038,7 +1042,7 @@ public class Job extends AbstractDiffable<Job> implements Writeable, ToXContentO
             out.writeString(jobType);
             if (jobVersion != null) {
                 out.writeBoolean(true);
-                Version.writeVersion(jobVersion, out);
+                MlConfigVersion.writeVersion(jobVersion, out);
             } else {
                 out.writeBoolean(false);
             }
@@ -1066,11 +1070,11 @@ public class Job extends AbstractDiffable<Job> implements Writeable, ToXContentO
             out.writeOptionalLong(modelSnapshotRetentionDays);
             out.writeOptionalLong(dailyModelSnapshotRetentionAfterDays);
             out.writeOptionalLong(resultsRetentionDays);
-            out.writeMap(customSettings);
+            out.writeGenericMap(customSettings);
             out.writeOptionalString(modelSnapshotId);
             if (modelSnapshotMinVersion != null) {
                 out.writeBoolean(true);
-                Version.writeVersion(modelSnapshotMinVersion, out);
+                MlConfigVersion.writeVersion(modelSnapshotMinVersion, out);
             } else {
                 out.writeBoolean(false);
             }
@@ -1207,6 +1211,32 @@ public class Job extends AbstractDiffable<Job> implements Writeable, ToXContentO
                 && modelSnapshotRetentionDays > DEFAULT_DAILY_MODEL_SNAPSHOT_RETENTION_AFTER_DAYS) {
                 dailyModelSnapshotRetentionAfterDays = DEFAULT_DAILY_MODEL_SNAPSHOT_RETENTION_AFTER_DAYS;
             }
+
+            final long SECONDS_IN_A_DAY = 86400;
+            if (analysisConfig.getBucketSpan().seconds() > SECONDS_IN_A_DAY) {
+                if (analysisConfig.getBucketSpan().seconds() % SECONDS_IN_A_DAY != 0) {
+                    deprecationLogger.critical(
+                        DeprecationCategory.OTHER,
+                        "bucket_span",
+                        "bucket_span {} [{}s] is not an integral multiple of the number of seconds in 1d [{}s]. This is now deprecated.",
+                        analysisConfig.getBucketSpan().toString(),
+                        analysisConfig.getBucketSpan().seconds(),
+                        SECONDS_IN_A_DAY
+                    );
+                }
+            } else {
+                if (SECONDS_IN_A_DAY % analysisConfig.getBucketSpan().seconds() != 0) {
+                    deprecationLogger.critical(
+                        DeprecationCategory.OTHER,
+                        "bucket_span",
+                        "bucket_span {} [{}s] is not an integral divisor of the number of seconds in 1d [{}s]. This is now deprecated.",
+                        analysisConfig.getBucketSpan().toString(),
+                        analysisConfig.getBucketSpan().seconds(),
+                        SECONDS_IN_A_DAY
+                    );
+                }
+            }
+
             if (analysisConfig.getModelPruneWindow() == null) {
                 long modelPruneWindowSeconds = analysisConfig.getBucketSpan().seconds() / 2 + AnalysisConfig.DEFAULT_MODEL_PRUNE_WINDOW
                     .seconds();
@@ -1217,7 +1247,6 @@ public class Job extends AbstractDiffable<Job> implements Writeable, ToXContentO
                 modelPruneWindowSeconds = Math.max(20 * analysisConfig.getBucketSpan().seconds(), modelPruneWindowSeconds);
 
                 AnalysisConfig.Builder analysisConfigBuilder = new AnalysisConfig.Builder(analysisConfig);
-                final long SECONDS_IN_A_DAY = 86400;
                 final long SECONDS_IN_AN_HOUR = 3600;
                 final long SECONDS_IN_A_MINUTE = 60;
                 if (modelPruneWindowSeconds % SECONDS_IN_A_DAY == 0) {
@@ -1292,7 +1321,7 @@ public class Job extends AbstractDiffable<Job> implements Writeable, ToXContentO
          */
         public Job build(@SuppressWarnings("HiddenField") Date createTime) {
             setCreateTime(createTime);
-            setJobVersion(Version.CURRENT);
+            setJobVersion(MlConfigVersion.CURRENT);
             return build();
         }
 

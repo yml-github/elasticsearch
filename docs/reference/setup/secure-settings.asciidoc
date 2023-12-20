@@ -9,7 +9,7 @@ manage the settings in the keystore.
 IMPORTANT: Only some settings are designed to be read from the keystore. However,
 the keystore has no validation to block unsupported settings. Adding unsupported
 settings to the keystore causes {es} to fail to start. To see whether a setting
-is supported in the keystore, look for a "Secure" qualifier the setting
+is supported in the keystore, look for a "Secure" qualifier in the setting
 reference.
 
 All the modifications to the keystore take effect only after restarting {es}.
@@ -55,9 +55,9 @@ call instead of reloading after each modification.
 
 There are reloadable secure settings for:
 
-* {plugins}/repository-azure-client-settings.html[The Azure repository plugin]
+* <<repository-azure,The Azure repository plugin>>
 * {plugins}/discovery-ec2-usage.html#_configuring_ec2_discovery[The EC2 discovery plugin]
-* {plugins}/repository-gcs-client.html[The GCS repository plugin]
-* {plugins}/repository-s3-client.html[The S3 repository plugin]
+* <<repository-gcs,The GCS repository plugin>>
+* <<repository-s3,The S3 repository plugin>>
 * <<monitoring-settings>>
 * <<notification-settings>>

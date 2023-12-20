@@ -12,7 +12,6 @@ import org.apache.lucene.search.BooleanClause;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
 import org.elasticsearch.common.io.stream.Writeable;
-import org.elasticsearch.common.util.CollectionUtils;
 
 import java.io.IOException;
 import java.util.Locale;
@@ -22,25 +21,17 @@ public enum Operator implements Writeable {
     AND;
 
     public BooleanClause.Occur toBooleanClauseOccur() {
-        switch (this) {
-            case OR:
-                return BooleanClause.Occur.SHOULD;
-            case AND:
-                return BooleanClause.Occur.MUST;
-            default:
-                throw Operator.newOperatorException(this.toString());
-        }
+        return switch (this) {
+            case OR -> BooleanClause.Occur.SHOULD;
+            case AND -> BooleanClause.Occur.MUST;
+        };
     }
 
     public QueryParser.Operator toQueryParserOperator() {
-        switch (this) {
-            case OR:
-                return QueryParser.Operator.OR;
-            case AND:
-                return QueryParser.Operator.AND;
-            default:
-                throw Operator.newOperatorException(this.toString());
-        }
+        return switch (this) {
+            case OR -> QueryParser.Operator.OR;
+            case AND -> QueryParser.Operator.AND;
+        };
     }
 
     public static Operator readFromStream(StreamInput in) throws IOException {
@@ -56,9 +47,4 @@ public enum Operator implements Writeable {
         return valueOf(op.toUpperCase(Locale.ROOT));
     }
 
-    private static IllegalArgumentException newOperatorException(String op) {
-        return new IllegalArgumentException(
-            "operator needs to be either " + CollectionUtils.arrayAsArrayList(values()) + ", but not [" + op + "]"
-        );
-    }
 }

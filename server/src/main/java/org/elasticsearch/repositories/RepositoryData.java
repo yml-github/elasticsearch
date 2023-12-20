@@ -13,10 +13,17 @@ import org.elasticsearch.ResourceNotFoundException;
 import org.elasticsearch.Version;
 import org.elasticsearch.cluster.metadata.IndexMetadata;
 import org.elasticsearch.cluster.metadata.Metadata;
+import org.elasticsearch.common.Strings;
 import org.elasticsearch.common.UUIDs;
+import org.elasticsearch.common.collect.Iterators;
 import org.elasticsearch.common.util.CollectionUtils;
+import org.elasticsearch.common.util.Maps;
 import org.elasticsearch.common.xcontent.XContentParserUtils;
 import org.elasticsearch.core.Nullable;
+import org.elasticsearch.index.IndexVersion;
+import org.elasticsearch.index.IndexVersions;
+import org.elasticsearch.logging.LogManager;
+import org.elasticsearch.logging.Logger;
 import org.elasticsearch.snapshots.SnapshotId;
 import org.elasticsearch.snapshots.SnapshotInfo;
 import org.elasticsearch.snapshots.SnapshotState;
@@ -30,6 +37,7 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -282,6 +290,7 @@ public final class RepositoryData {
         final SnapshotDetails snapshotDetails = getSnapshotDetails(snapshotId);
         return snapshotDetails == null
             || snapshotDetails.getVersion() == null
+            || snapshotDetails.getVersion().id() == NUMERIC_INDEX_VERSION_MARKER.id()
             || snapshotDetails.getStartTimeMillis() == -1
             || snapshotDetails.getEndTimeMillis() == -1
             || snapshotDetails.getSlmPolicy() == null;
@@ -305,10 +314,10 @@ public final class RepositoryData {
     }
 
     /**
-     * Returns the {@link Version} for the given snapshot or {@code null} if unknown.
+     * Returns the {@link IndexVersion} for the given snapshot or {@code null} if unknown.
      */
     @Nullable
-    public Version getVersion(SnapshotId snapshotId) {
+    public IndexVersion getVersion(SnapshotId snapshotId) {
         return snapshotsDetails.getOrDefault(snapshotId.getUUID(), SnapshotDetails.EMPTY).getVersion();
     }
 
@@ -320,25 +329,36 @@ public final class RepositoryData {
     }
 
     /**
-     * Returns the list of {@link IndexId} that have their snapshots updated but not removed (because they are still referenced by other
-     * snapshots) after removing the given snapshot from the repository.
+     * Returns an iterator over {@link IndexId} that have their snapshots updated but not removed (because they are still referenced by
+     * other snapshots) after removing the given snapshot from the repository.
      *
      * @param snapshotIds SnapshotId to remove
-     * @return List of indices that are changed but not removed
+     * @return Iterator over indices that are changed but not removed
      */
-    public List<IndexId> indicesToUpdateAfterRemovingSnapshot(Collection<SnapshotId> snapshotIds) {
-        return indexSnapshots.entrySet().stream().filter(entry -> {
-            final Collection<SnapshotId> existingIds = entry.getValue();
-            if (snapshotIds.containsAll(existingIds)) {
-                return existingIds.size() > snapshotIds.size();
+    public Iterator<IndexId> indicesToUpdateAfterRemovingSnapshot(Collection<SnapshotId> snapshotIds) {
+        return Iterators.flatMap(indexSnapshots.entrySet().iterator(), entry -> {
+            if (isIndexToUpdateAfterRemovingSnapshots(entry.getValue(), snapshotIds)) {
+                return Iterators.single(entry.getKey());
+            } else {
+                return Collections.emptyIterator();
             }
-            for (SnapshotId snapshotId : snapshotIds) {
-                if (entry.getValue().contains(snapshotId)) {
-                    return true;
-                }
+        });
+    }
+
+    private static boolean isIndexToUpdateAfterRemovingSnapshots(
+        Collection<SnapshotId> snapshotsContainingIndex,
+        Collection<SnapshotId> snapshotsToDelete
+    ) {
+        // TODO this method is pretty opaque, let's add some comments
+        if (snapshotsToDelete.containsAll(snapshotsContainingIndex)) {
+            return snapshotsContainingIndex.size() > snapshotsToDelete.size();
+        }
+        for (SnapshotId snapshotId : snapshotsToDelete) {
+            if (snapshotsContainingIndex.contains(snapshotId)) {
+                return true;
             }
-            return false;
-        }).map(Map.Entry::getKey).collect(Collectors.toList());
+        }
+        return false;
     }
 
     /**
@@ -350,7 +370,7 @@ public final class RepositoryData {
      * @return map of index to index metadata blob id to delete
      */
     public Map<IndexId, Collection<String>> indexMetaDataToRemoveAfterRemovingSnapshots(Collection<SnapshotId> snapshotIds) {
-        Collection<IndexId> indicesForSnapshot = indicesToUpdateAfterRemovingSnapshot(snapshotIds);
+        Iterator<IndexId> indicesForSnapshot = indicesToUpdateAfterRemovingSnapshot(snapshotIds);
         final Set<String> allRemainingIdentifiers = indexMetaDataGenerations.lookup.entrySet()
             .stream()
             .filter(e -> snapshotIds.contains(e.getKey()) == false)
@@ -358,7 +378,8 @@ public final class RepositoryData {
             .map(indexMetaDataGenerations::getIndexMetaBlobId)
             .collect(Collectors.toSet());
         final Map<IndexId, Collection<String>> toRemove = new HashMap<>();
-        for (IndexId indexId : indicesForSnapshot) {
+        while (indicesForSnapshot.hasNext()) {
+            final var indexId = indicesForSnapshot.next();
             for (SnapshotId snapshotId : snapshotIds) {
                 final String identifier = indexMetaDataGenerations.indexMetaBlobId(snapshotId, indexId);
                 if (allRemainingIdentifiers.contains(identifier) == false) {
@@ -589,7 +610,7 @@ public final class RepositoryData {
      * Resolve the given index names to index ids.
      */
     public Map<String, IndexId> resolveIndices(final List<String> indices) {
-        Map<String, IndexId> resolvedIndices = new HashMap<>(indices.size());
+        Map<String, IndexId> resolvedIndices = Maps.newMapWithExpectedSize(indices.size());
         for (final String indexName : indices) {
             final IndexId indexId = resolveIndexId(indexName);
             resolvedIndices.put(indexId.getName(), indexId);
@@ -612,7 +633,7 @@ public final class RepositoryData {
      * @param inFlightIds      name to index mapping for currently in-flight snapshots not yet in the repository data to fall back to
      */
     public Map<String, IndexId> resolveNewIndices(List<String> indicesToResolve, Map<String, IndexId> inFlightIds) {
-        Map<String, IndexId> snapshotIndices = new HashMap<>(indicesToResolve.size());
+        Map<String, IndexId> snapshotIndices = Maps.newMapWithExpectedSize(indicesToResolve.size());
         for (String index : indicesToResolve) {
             IndexId indexId = indices.get(index);
             if (indexId == null) {
@@ -623,7 +644,7 @@ public final class RepositoryData {
             }
             snapshotIndices.put(indexId.getName(), indexId);
         }
-        return Collections.unmodifiableMap(snapshotIndices);
+        return Map.copyOf(snapshotIndices);
     }
 
     private static final String SHARD_GENERATIONS = "shard_generations";
@@ -637,6 +658,7 @@ public final class RepositoryData {
     private static final String CLUSTER_UUID = "cluster_id";
     private static final String STATE = "state";
     private static final String VERSION = "version";
+    private static final String INDEX_VERSION = "index_version";
     private static final String MIN_VERSION = "min_version";
     private static final String START_TIME_MILLIS = "start_time_millis";
     private static final String END_TIME_MILLIS = "end_time_millis";
@@ -645,16 +667,23 @@ public final class RepositoryData {
     /**
      * Writes the snapshots metadata and the related indices metadata to x-content.
      */
-    public XContentBuilder snapshotsToXContent(final XContentBuilder builder, final Version repoMetaVersion) throws IOException {
+    public XContentBuilder snapshotsToXContent(final XContentBuilder builder, final IndexVersion repoMetaVersion) throws IOException {
         return snapshotsToXContent(builder, repoMetaVersion, false);
     }
+
+    /**
+     * From 8.11.0 onwards we use numeric index versions, but leave the string "8.11.0" in the old version field for bwc.
+     * See <a href="https://github.com/elastic/elasticsearch/issues/98454">#98454</a> for details.
+     */
+    private static final IndexVersion NUMERIC_INDEX_VERSION_MARKER = IndexVersion.fromId(8_11_00_99);
+    private static final String NUMERIC_INDEX_VERSION_MARKER_STRING = "8.11.0";
 
     /**
      * Writes the snapshots metadata and the related indices metadata to x-content.
      * @param permitMissingUuid indicates whether we permit the repository- and cluster UUIDs to be missing,
      *                          e.g. we are serializing for the in-memory cache or running tests
      */
-    public XContentBuilder snapshotsToXContent(final XContentBuilder builder, final Version repoMetaVersion, boolean permitMissingUuid)
+    public XContentBuilder snapshotsToXContent(final XContentBuilder builder, final IndexVersion repoMetaVersion, boolean permitMissingUuid)
         throws IOException {
 
         final boolean shouldWriteUUIDS = SnapshotsService.includesUUIDs(repoMetaVersion);
@@ -668,7 +697,7 @@ public final class RepositoryData {
 
         if (shouldWriteShardGens) {
             // Add min version field to make it impossible for older ES versions to deserialize this object
-            final Version minVersion;
+            final IndexVersion minVersion;
             if (shouldWriteUUIDS) {
                 minVersion = SnapshotsService.UUIDS_IN_REPO_DATA_VERSION;
             } else if (shouldWriteIndexGens) {
@@ -676,26 +705,59 @@ public final class RepositoryData {
             } else {
                 minVersion = SnapshotsService.SHARD_GEN_IN_REPO_DATA_VERSION;
             }
-            builder.field(MIN_VERSION, minVersion.toString());
+            // Note that all known versions expect the MIN_VERSION field to be a string, and versions before 8.11.0 try and parse it as a
+            // major.minor.patch version number, so if we introduce a numeric format version in future then this will cause them to fail
+            // with an opaque parse error rather than the more helpful:
+            //
+            // IllegalStateException: this snapshot repository format requires Elasticsearch version [x.y.z] or later
+            //
+            // Likewise if we simply encode the numeric IndexVersion as a string then versions from 8.11.0 onwards will report the exact
+            // string in this message, which is not especially helpful to users. Slightly more helpful than the opaque parse error reported
+            // by earlier versions, but still not great. TODO rethink this if and when adding a new snapshot repository format version.
+            if (minVersion.before(IndexVersions.V_8_10_0)) {
+                // write as a string
+                builder.field(MIN_VERSION, Version.fromId(minVersion.id()).toString());
+            } else {
+                assert false : "writing a numeric version [" + minVersion + "] is unhelpful here, see preceding comment";
+                // write an int
+                builder.field(MIN_VERSION, minVersion.id());
+            }
         }
 
         if (shouldWriteUUIDS) {
             if (uuid.equals(MISSING_UUID)) {
-                assert permitMissingUuid : "missing uuid";
+                if (permitMissingUuid == false) {
+                    assert false : "missing uuid";
+                    throw new IllegalStateException("missing uuid");
+                }
             } else {
                 builder.field(UUID, uuid);
             }
             if (clusterUUID.equals(MISSING_UUID)) {
-                assert permitMissingUuid : "missing clusterUUID";
+                if (permitMissingUuid == false) {
+                    assert false : "missing clusterUUID";
+                    throw new IllegalStateException("missing clusterUUID");
+                }
             } else {
                 builder.field(CLUSTER_UUID, clusterUUID);
             }
         } else {
-            assert uuid.equals(MISSING_UUID) : "lost uuid " + uuid;
-            assert clusterUUID.equals(MISSING_UUID) : "lost clusterUUID " + clusterUUID;
+            if (uuid.equals(MISSING_UUID) == false) {
+                final IllegalStateException e = new IllegalStateException("lost uuid + [" + uuid + "]");
+                assert false : e;
+                throw e;
+            }
+            if (clusterUUID.equals(MISSING_UUID) == false) {
+                final IllegalStateException e = new IllegalStateException("lost clusterUUID + [" + uuid + "]");
+                assert false : e;
+                throw e;
+            }
         }
 
         // write the snapshots list
+
+        int numericIndexVersionMarkerPlaceholdersUsed = 0;
+        SnapshotId lastSnapshotWithNumericIndexVersionPlaceholder = null;
 
         builder.startArray(SNAPSHOTS);
         for (final SnapshotId snapshot : getSnapshotIds()) {
@@ -716,9 +778,19 @@ public final class RepositoryData {
                 }
                 builder.endObject();
             }
-            final Version version = snapshotDetails.getVersion();
+            final IndexVersion version = snapshotDetails.getVersion();
             if (version != null) {
-                builder.field(VERSION, version.toString());
+                if (version.equals(NUMERIC_INDEX_VERSION_MARKER)) {
+                    numericIndexVersionMarkerPlaceholdersUsed += 1;
+                    lastSnapshotWithNumericIndexVersionPlaceholder = snapshot;
+                    builder.field(VERSION, NUMERIC_INDEX_VERSION_MARKER_STRING);
+                } else if (version.onOrAfter(IndexVersions.FIRST_DETACHED_INDEX_VERSION)) {
+                    builder.field(VERSION, NUMERIC_INDEX_VERSION_MARKER_STRING);
+                    builder.field(INDEX_VERSION, version.id());
+                } else {
+                    assert version.id() < NUMERIC_INDEX_VERSION_MARKER.id() : version; // versions between 8.10.last and 8_500_000 invalid
+                    builder.field(VERSION, Version.fromId(version.id()).toString());
+                }
             }
 
             if (snapshotDetails.getStartTimeMillis() != -1) {
@@ -734,6 +806,18 @@ public final class RepositoryData {
             builder.endObject();
         }
         builder.endArray();
+
+        if (numericIndexVersionMarkerPlaceholdersUsed > 0) {
+            // This shouldn't happen without other failures - we might see the 8.11.0 marker if the RepositoryData was previously written by
+            // a pre-8.11.0 version which does not know to write the INDEX_VERSION field, but in that case we will reload the correct
+            // version from SnapshotInfo before writing the new RepositoryData; this reload process is technically a best-effort thing so we
+            // must tolerate the case where it fails, but we can report the problem at least.
+            logger.warn(
+                "created RepositoryData with [{}] snapshot(s) using a placeholder version of '8.11.0', including [{}]",
+                numericIndexVersionMarkerPlaceholdersUsed,
+                lastSnapshotWithNumericIndexVersionPlaceholder
+            );
+        }
 
         // write the indices map
         builder.startObject(INDICES);
@@ -786,41 +870,44 @@ public final class RepositoryData {
         Map<String, String> indexMetaIdentifiers = null;
         String uuid = MISSING_UUID;
         String clusterUUID = MISSING_UUID;
-        while (parser.nextToken() == XContentParser.Token.FIELD_NAME) {
-            final String field = parser.currentName();
+        String field;
+        while ((field = parser.nextFieldName()) != null) {
             switch (field) {
-                case SNAPSHOTS:
-                    parseSnapshots(parser, snapshots, snapshotsDetails, indexMetaLookup);
-                    break;
-                case INDICES:
-                    parseIndices(parser, fixBrokenShardGens, snapshots, indexSnapshots, indexLookup, shardGenerations);
-                    break;
-                case INDEX_METADATA_IDENTIFIERS:
+                case SNAPSHOTS -> parseSnapshots(parser, snapshots, snapshotsDetails, indexMetaLookup);
+                case INDICES -> parseIndices(parser, fixBrokenShardGens, snapshots, indexSnapshots, indexLookup, shardGenerations);
+                case INDEX_METADATA_IDENTIFIERS -> {
                     XContentParserUtils.ensureExpectedToken(XContentParser.Token.START_OBJECT, parser.nextToken(), parser);
                     indexMetaIdentifiers = parser.mapStrings();
-                    break;
-                case MIN_VERSION:
-                    XContentParserUtils.ensureExpectedToken(XContentParser.Token.VALUE_STRING, parser.nextToken(), parser);
-                    final Version version = Version.fromString(parser.text());
+                }
+                case MIN_VERSION -> {
+                    final var token = parser.nextToken();
+                    XContentParserUtils.ensureExpectedToken(XContentParser.Token.VALUE_STRING, token, parser);
+                    final var versionString = parser.text();
+                    final var version = switch (versionString) {
+                        case "7.12.0" -> IndexVersions.V_7_12_0;
+                        case "7.9.0" -> IndexVersions.V_7_9_0;
+                        case "7.6.0" -> IndexVersions.V_7_6_0;
+                        default ->
+                            // All (known) versions only ever emit one of the above strings for the format version, so if we see something
+                            // else it must be a newer version or else something wholly invalid. Report the raw string rather than trying
+                            // to parse it.
+                            throw new IllegalStateException(Strings.format("""
+                                this snapshot repository format requires Elasticsearch version [%s] or later""", versionString));
+                    };
+
                     assert SnapshotsService.useShardGenerations(version);
-                    if (version.after(Version.CURRENT)) {
-                        throw new IllegalStateException(
-                            "this snapshot repository format requires Elasticsearch version [" + version + "] or later"
-                        );
-                    }
-                    break;
-                case UUID:
+                }
+                case UUID -> {
                     XContentParserUtils.ensureExpectedToken(XContentParser.Token.VALUE_STRING, parser.nextToken(), parser);
                     uuid = parser.text();
                     assert uuid.equals(MISSING_UUID) == false;
-                    break;
-                case CLUSTER_UUID:
+                }
+                case CLUSTER_UUID -> {
                     XContentParserUtils.ensureExpectedToken(XContentParser.Token.VALUE_STRING, parser.nextToken(), parser);
                     clusterUUID = parser.text();
                     assert clusterUUID.equals(MISSING_UUID) == false;
-                    break;
-                default:
-                    XContentParserUtils.throwUnknownField(field, parser.getTokenLocation());
+                }
+                default -> XContentParserUtils.throwUnknownField(field, parser);
             }
         }
 
@@ -858,14 +945,14 @@ public final class RepositoryData {
             return IndexMetaDataGenerations.EMPTY;
         }
         // Build a new map that instead of indexing the per-snapshot index generations by index id string, is indexed by IndexId
-        final Map<SnapshotId, Map<IndexId, String>> indexGenerations = new HashMap<>(indexMetaLookup.size());
+        final Map<SnapshotId, Map<IndexId, String>> indexGenerations = Maps.newMapWithExpectedSize(indexMetaLookup.size());
         for (Map.Entry<SnapshotId, Map<String, String>> snapshotIdMapEntry : indexMetaLookup.entrySet()) {
             final Map<String, String> val = snapshotIdMapEntry.getValue();
-            final Map<IndexId, String> forSnapshot = new HashMap<>(val.size());
+            final Map<IndexId, String> forSnapshot = Maps.newMapWithExpectedSize(val.size());
             for (Map.Entry<String, String> generationEntry : val.entrySet()) {
                 forSnapshot.put(indexLookup.get(generationEntry.getKey()), generationEntry.getValue());
             }
-            indexGenerations.put(snapshotIdMapEntry.getKey(), forSnapshot);
+            indexGenerations.put(snapshotIdMapEntry.getKey(), Map.copyOf(forSnapshot));
         }
         return new IndexMetaDataGenerations(indexGenerations, indexMetaIdentifiers);
     }
@@ -893,43 +980,40 @@ public final class RepositoryData {
             String uuid = null;
             SnapshotState state = null;
             Map<String, String> metaGenerations = null;
-            Version version = null;
+            IndexVersion version = null;
+            IndexVersion indexVersion = null;
             long startTimeMillis = -1;
             long endTimeMillis = -1;
             String slmPolicy = null;
             while (parser.nextToken() != XContentParser.Token.END_OBJECT) {
                 String currentFieldName = parser.currentName();
-                parser.nextToken();
+                var token = parser.nextToken();
                 switch (currentFieldName) {
-                    case NAME:
-                        name = parser.text();
-                        break;
-                    case UUID:
-                        uuid = parser.text();
-                        break;
-                    case STATE:
-                        state = SnapshotState.fromValue((byte) parser.intValue());
-                        break;
-                    case INDEX_METADATA_LOOKUP:
-                        metaGenerations = parser.map(HashMap::new, p -> stringDeduplicator.computeIfAbsent(p.text(), Function.identity()));
-                        break;
-                    case VERSION:
-                        version = Version.fromString(parser.text());
-                        break;
-                    case START_TIME_MILLIS:
+                    case NAME -> name = parser.text();
+                    case UUID -> uuid = parser.text();
+                    case STATE -> state = SnapshotState.fromValue((byte) parser.intValue());
+                    case INDEX_METADATA_LOOKUP -> metaGenerations = parser.map(
+                        HashMap::new,
+                        p -> stringDeduplicator.computeIfAbsent(p.text(), Function.identity())
+                    );
+                    case VERSION -> version = parseIndexVersion(token, parser);
+                    case INDEX_VERSION -> indexVersion = IndexVersion.fromId(parser.intValue());
+                    case START_TIME_MILLIS -> {
                         assert startTimeMillis == -1;
                         startTimeMillis = parser.longValue();
-                        break;
-                    case END_TIME_MILLIS:
+                    }
+                    case END_TIME_MILLIS -> {
                         assert endTimeMillis == -1;
                         endTimeMillis = parser.longValue();
-                        break;
-                    case SLM_POLICY:
-                        slmPolicy = stringDeduplicator.computeIfAbsent(parser.text(), Function.identity());
+                    }
+                    case SLM_POLICY -> slmPolicy = stringDeduplicator.computeIfAbsent(parser.text(), Function.identity());
                 }
             }
             assert (startTimeMillis == -1) == (endTimeMillis == -1) : "unexpected: " + startTimeMillis + ", " + endTimeMillis + ", ";
             final SnapshotId snapshotId = new SnapshotId(name, uuid);
+            if (indexVersion != null) {
+                version = indexVersion;
+            }
             if (state != null || version != null) {
                 snapshotsDetails.put(uuid, new SnapshotDetails(state, version, startTimeMillis, endTimeMillis, slmPolicy));
             }
@@ -937,6 +1021,25 @@ public final class RepositoryData {
             if (metaGenerations != null && metaGenerations.isEmpty() == false) {
                 indexMetaLookup.put(snapshotId, metaGenerations);
             }
+        }
+    }
+
+    private static final Logger logger = LogManager.getLogger(RepositoryData.class);
+
+    private static IndexVersion parseIndexVersion(XContentParser.Token token, XContentParser parser) throws IOException {
+        if (token == XContentParser.Token.VALUE_NUMBER) {
+            return IndexVersion.fromId(parser.intValue());
+        } else {
+            XContentParserUtils.ensureExpectedToken(XContentParser.Token.VALUE_STRING, token, parser);
+            final var versionStr = parser.text();
+            if (NUMERIC_INDEX_VERSION_MARKER_STRING.equals(versionStr)) {
+                return NUMERIC_INDEX_VERSION_MARKER;
+            }
+            final var versionId = Version.fromString(versionStr).id;
+            if (versionId > 8_11_00_99 && versionId < 8_500_000) {
+                logger.error("found impossible string index version [{}] with id [{}]", versionStr, versionId);
+            }
+            return IndexVersion.fromId(versionId);
         }
     }
 
@@ -971,10 +1074,8 @@ public final class RepositoryData {
                 final String indexMetaFieldName = parser.currentName();
                 final XContentParser.Token currentToken = parser.nextToken();
                 switch (indexMetaFieldName) {
-                    case INDEX_ID:
-                        indexId = new IndexId(indexName, parser.text());
-                        break;
-                    case SNAPSHOTS:
+                    case INDEX_ID -> indexId = new IndexId(indexName, parser.text());
+                    case SNAPSHOTS -> {
                         XContentParserUtils.ensureExpectedToken(XContentParser.Token.START_ARRAY, currentToken, parser);
                         XContentParser.Token currToken;
                         while ((currToken = parser.nextToken()) != XContentParser.Token.END_ARRAY) {
@@ -1003,13 +1104,13 @@ public final class RepositoryData {
                             }
                             snapshotIds.add(snapshotId);
                         }
-                        break;
-                    case SHARD_GENERATIONS:
+                    }
+                    case SHARD_GENERATIONS -> {
                         XContentParserUtils.ensureExpectedToken(XContentParser.Token.START_ARRAY, currentToken, parser);
                         while (parser.nextToken() != XContentParser.Token.END_ARRAY) {
                             gens.add(ShardGeneration.fromXContent(parser));
                         }
-                        break;
+                    }
                 }
             }
             assert indexId != null;
@@ -1051,7 +1152,7 @@ public final class RepositoryData {
         private final SnapshotState snapshotState;
 
         @Nullable // may be omitted if pre-7.6 nodes were involved somewhere
-        private final Version version;
+        private final IndexVersion version;
 
         // May be -1 if unknown, which happens if the snapshot was taken before 7.14 and hasn't been updated yet
         private final long startTimeMillis;
@@ -1066,7 +1167,7 @@ public final class RepositoryData {
 
         public SnapshotDetails(
             @Nullable SnapshotState snapshotState,
-            @Nullable Version version,
+            @Nullable IndexVersion version,
             long startTimeMillis,
             long endTimeMillis,
             @Nullable String slmPolicy
@@ -1084,7 +1185,7 @@ public final class RepositoryData {
         }
 
         @Nullable
-        public Version getVersion() {
+        public IndexVersion getVersion() {
             return version;
         }
 
@@ -1128,6 +1229,39 @@ public final class RepositoryData {
             return Objects.hash(snapshotState, version, startTimeMillis, endTimeMillis, slmPolicy);
         }
 
+        @Override
+        public String toString() {
+            return "SnapshotDetails{"
+                + "snapshotState="
+                + snapshotState
+                + ", version="
+                + version
+                + ", startTimeMillis="
+                + startTimeMillis
+                + ", endTimeMillis="
+                + endTimeMillis
+                + ", slmPolicy='"
+                + slmPolicy
+                + "'}";
+        }
+
+        public static SnapshotDetails fromSnapshotInfo(SnapshotInfo snapshotInfo) {
+            return new SnapshotDetails(
+                snapshotInfo.state(),
+                snapshotInfo.version(),
+                snapshotInfo.startTime(),
+                snapshotInfo.endTime(),
+                slmPolicy(snapshotInfo.userMetadata())
+            );
+        }
+
+        private static String slmPolicy(Map<String, Object> userMetadata) {
+            if (userMetadata != null && userMetadata.get(SnapshotsService.POLICY_ID_METADATA_FIELD) instanceof String policyId) {
+                return policyId;
+            } else {
+                return "";
+            }
+        }
     }
 
 }

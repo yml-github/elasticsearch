@@ -23,21 +23,23 @@ import org.elasticsearch.gradle.internal.info.BuildParams;
 import org.elasticsearch.gradle.internal.info.GlobalBuildInfoPlugin;
 import org.elasticsearch.gradle.util.GradleUtils;
 import org.gradle.api.GradleException;
-import org.gradle.api.NamedDomainObjectContainer;
+import org.gradle.api.Plugin;
 import org.gradle.api.Project;
 import org.gradle.api.artifacts.Dependency;
+import org.gradle.api.artifacts.dsl.DependencyHandler;
 import org.gradle.api.provider.Provider;
 
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.function.Function;
-
-import static org.elasticsearch.gradle.util.GradleUtils.projectDependency;
 
 /**
  * An internal elasticsearch build plugin that registers additional
  * distribution resolution strategies to the 'elasticsearch.download-distribution' plugin
  * to resolve distributions from a local snapshot or a locally built bwc snapshot.
  */
-public class InternalDistributionDownloadPlugin implements InternalPlugin {
+public class InternalDistributionDownloadPlugin implements Plugin<Project> {
 
     @Override
     public void apply(Project project) {
@@ -50,7 +52,7 @@ public class InternalDistributionDownloadPlugin implements InternalPlugin {
             DockerSupportPlugin.DOCKER_SUPPORT_SERVICE_NAME
         );
         distributionDownloadPlugin.setDockerAvailability(
-            dockerSupport.map(dockerSupportService -> dockerSupportService.getDockerAvailability().isAvailable)
+            dockerSupport.map(dockerSupportService -> dockerSupportService.getDockerAvailability().isAvailable())
         );
         registerInternalDistributionResolutions(DistributionDownloadPlugin.getRegistrationsContainer(project));
     }
@@ -63,18 +65,18 @@ public class InternalDistributionDownloadPlugin implements InternalPlugin {
      * <p>
      * BWC versions are resolved as project to projects under `:distribution:bwc`.
      */
-    private void registerInternalDistributionResolutions(NamedDomainObjectContainer<DistributionResolution> resolutions) {
-        resolutions.register("localBuild", distributionResolution -> distributionResolution.setResolver((project, distribution) -> {
+    private void registerInternalDistributionResolutions(List<DistributionResolution> resolutions) {
+        resolutions.add(new DistributionResolution("local-build", (project, distribution) -> {
             if (isCurrentVersion(distribution)) {
                 // non-external project, so depend on local build
                 return new ProjectBasedDistributionDependency(
-                    config -> projectDependency(project, distributionProjectPath(distribution), config)
+                    config -> projectDependency(project.getDependencies(), distributionProjectPath(distribution), config)
                 );
             }
             return null;
         }));
 
-        resolutions.register("bwc", distributionResolution -> distributionResolution.setResolver((project, distribution) -> {
+        resolutions.add(new DistributionResolution("bwc", (project, distribution) -> {
             BwcVersions.UnreleasedVersionInfo unreleasedInfo = BuildParams.getBwcVersions()
                 .unreleasedInfo(Version.fromString(distribution.getVersion()));
             if (unreleasedInfo != null) {
@@ -88,7 +90,7 @@ public class InternalDistributionDownloadPlugin implements InternalPlugin {
                 }
                 String projectConfig = getProjectConfig(distribution, unreleasedInfo);
                 return new ProjectBasedDistributionDependency(
-                    (config) -> projectDependency(project, unreleasedInfo.gradleProjectPath, projectConfig)
+                    (config) -> projectDependency(project.getDependencies(), unreleasedInfo.gradleProjectPath(), projectConfig)
                 );
             }
             return null;
@@ -107,12 +109,19 @@ public class InternalDistributionDownloadPlugin implements InternalPlugin {
     private static String getProjectConfig(ElasticsearchDistribution distribution, BwcVersions.UnreleasedVersionInfo info) {
         String distributionProjectName = distributionProjectName(distribution);
         if (distribution.getType().shouldExtract()) {
-            return (info.gradleProjectPath.equals(":distribution") || info.version.before("7.10.0"))
+            return (info.gradleProjectPath().equals(":distribution") || info.version().before("7.10.0"))
                 ? distributionProjectName
                 : "expanded-" + distributionProjectName;
         } else {
             return distributionProjectName;
         }
+    }
+
+    private static Dependency projectDependency(DependencyHandler dependencyHandler, String projectPath, String projectConfig) {
+        Map<String, Object> depConfig = new HashMap<>();
+        depConfig.put("path", projectPath);
+        depConfig.put("configuration", projectConfig);
+        return dependencyHandler.project(depConfig);
     }
 
     private static String distributionProjectPath(ElasticsearchDistribution distribution) {
@@ -127,12 +136,6 @@ public class InternalDistributionDownloadPlugin implements InternalPlugin {
             projectPath += distributionProjectName(distribution);
         }
         return projectPath;
-    }
-
-    @Override
-    public String getExternalUseErrorMessage() {
-        return "Plugin 'elasticsearch.internal-distribution-download' is not supported. "
-            + "Use 'elasticsearch.distribution-download' plugin instead.";
     }
 
     /**
@@ -177,11 +180,11 @@ public class InternalDistributionDownloadPlugin implements InternalPlugin {
         return projectName + distribution.getType().getName();
     }
 
-    private static class ProjectBasedDistributionDependency implements DistributionDependency {
+    public static class ProjectBasedDistributionDependency implements DistributionDependency {
 
         private Function<String, Dependency> function;
 
-        ProjectBasedDistributionDependency(Function<String, Dependency> function) {
+        public ProjectBasedDistributionDependency(Function<String, Dependency> function) {
             this.function = function;
         }
 

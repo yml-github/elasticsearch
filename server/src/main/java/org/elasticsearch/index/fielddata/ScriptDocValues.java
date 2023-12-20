@@ -8,15 +8,16 @@
 
 package org.elasticsearch.index.fielddata;
 
-import org.apache.lucene.index.SortedNumericDocValues;
 import org.apache.lucene.util.ArrayUtil;
 import org.apache.lucene.util.BytesRef;
 import org.apache.lucene.util.BytesRefBuilder;
+import org.elasticsearch.common.geo.BoundingBox;
 import org.elasticsearch.common.geo.GeoBoundingBox;
 import org.elasticsearch.common.geo.GeoPoint;
 import org.elasticsearch.common.geo.GeoUtils;
+import org.elasticsearch.common.geo.SpatialPoint;
 import org.elasticsearch.geometry.utils.Geohash;
-import org.elasticsearch.script.field.DocValuesField;
+import org.elasticsearch.script.field.DocValuesScriptFieldFactory;
 
 import java.io.IOException;
 import java.time.ZonedDateTime;
@@ -36,10 +37,10 @@ public abstract class ScriptDocValues<T> extends AbstractList<T> {
 
     /**
      * Supplies values to different ScriptDocValues as we
-     * convert them to wrappers around {@link DocValuesField}.
-     * This allows for different {@link DocValuesField} to implement
+     * convert them to wrappers around {@link DocValuesScriptFieldFactory}.
+     * This allows for different {@link DocValuesScriptFieldFactory} to implement
      * this supplier class in many-to-one relationship since
-     * {@link DocValuesField} are more specific where
+     * {@link DocValuesScriptFieldFactory} are more specific where
      * ({byte, short, int, long, _version, murmur3, etc.} -> {long})
      */
     public interface Supplier<T> {
@@ -91,48 +92,6 @@ public abstract class ScriptDocValues<T> extends AbstractList<T> {
             throw new IllegalStateException(
                 "A document doesn't have a value for a field! " + "Use doc[<field>].size()==0 to check if a document is missing a field!"
             );
-        }
-    }
-
-    public static class LongsSupplier implements Supplier<Long> {
-
-        private final SortedNumericDocValues in;
-        private long[] values = new long[0];
-        private int count;
-
-        public LongsSupplier(SortedNumericDocValues in) {
-            this.in = in;
-        }
-
-        @Override
-        public void setNextDocId(int docId) throws IOException {
-            if (in.advanceExact(docId)) {
-                resize(in.docValueCount());
-                for (int i = 0; i < count; i++) {
-                    values[i] = in.nextValue();
-                }
-            } else {
-                resize(0);
-            }
-        }
-
-        /**
-         * Set the {@link #size()} and ensure that the {@link #values} array can
-         * store at least that many entries.
-         */
-        private void resize(int newSize) {
-            count = newSize;
-            values = ArrayUtil.grow(values, count);
-        }
-
-        @Override
-        public Long getInternal(int index) {
-            return values[index];
-        }
-
-        @Override
-        public int size() {
-            return count;
         }
     }
 
@@ -263,9 +222,9 @@ public abstract class ScriptDocValues<T> extends AbstractList<T> {
         }
     }
 
-    public abstract static class Geometry<T> extends ScriptDocValues<T> {
+    public abstract static class BaseGeometry<T extends SpatialPoint, V> extends ScriptDocValues<V> {
 
-        public Geometry(Supplier<T> supplier) {
+        public BaseGeometry(Supplier<V> supplier) {
             super(supplier);
         }
 
@@ -273,30 +232,52 @@ public abstract class ScriptDocValues<T> extends AbstractList<T> {
         public abstract int getDimensionalType();
 
         /** Returns the bounding box of this geometry  */
-        public abstract GeoBoundingBox getBoundingBox();
+        public abstract BoundingBox<T> getBoundingBox();
+
+        /** Returns the suggested label position  */
+        public abstract T getLabelPosition();
 
         /** Returns the centroid of this geometry  */
-        public abstract GeoPoint getCentroid();
+        public abstract T getCentroid();
+    }
+
+    public interface Geometry {
+        /** Returns the dimensional type of this geometry */
+        int getDimensionalType();
+
+        /** Returns the bounding box of this geometry  */
+        GeoBoundingBox getBoundingBox();
+
+        /** Returns the suggested label position  */
+        GeoPoint getLabelPosition();
+
+        /** Returns the centroid of this geometry  */
+        GeoPoint getCentroid();
+
+        /** returns the size of the geometry */
+        int size();
 
         /** Returns the width of the bounding box diagonal in the spherical Mercator projection (meters)  */
-        public abstract double getMercatorWidth();
+        double getMercatorWidth();
 
         /** Returns the height of the bounding box diagonal in the spherical Mercator projection (meters) */
-        public abstract double getMercatorHeight();
+        double getMercatorHeight();
     }
 
-    public interface GeometrySupplier<T> extends Supplier<T> {
+    public interface GeometrySupplier<T extends SpatialPoint, V> extends Supplier<V> {
 
-        GeoPoint getInternalCentroid();
+        T getInternalCentroid();
 
-        GeoBoundingBox getInternalBoundingBox();
+        BoundingBox<T> getInternalBoundingBox();
+
+        T getInternalLabelPosition();
     }
 
-    public static class GeoPoints extends Geometry<GeoPoint> {
+    public static class GeoPoints extends BaseGeometry<GeoPoint, GeoPoint> implements Geometry {
 
-        private final GeometrySupplier<GeoPoint> geometrySupplier;
+        private final GeometrySupplier<GeoPoint, GeoPoint> geometrySupplier;
 
-        public GeoPoints(GeometrySupplier<GeoPoint> supplier) {
+        public GeoPoints(GeometrySupplier<GeoPoint, GeoPoint> supplier) {
             super(supplier);
             geometrySupplier = supplier;
         }
@@ -404,7 +385,12 @@ public abstract class ScriptDocValues<T> extends AbstractList<T> {
 
         @Override
         public GeoBoundingBox getBoundingBox() {
-            return size() == 0 ? null : geometrySupplier.getInternalBoundingBox();
+            return size() == 0 ? null : (GeoBoundingBox) geometrySupplier.getInternalBoundingBox();
+        }
+
+        @Override
+        public GeoPoint getLabelPosition() {
+            return size() == 0 ? null : geometrySupplier.getInternalLabelPosition();
         }
     }
 
@@ -471,7 +457,7 @@ public abstract class ScriptDocValues<T> extends AbstractList<T> {
             }
         }
 
-        protected String bytesToString(BytesRef bytesRef) {
+        protected static String bytesToString(BytesRef bytesRef) {
             return bytesRef.utf8ToString();
         }
 

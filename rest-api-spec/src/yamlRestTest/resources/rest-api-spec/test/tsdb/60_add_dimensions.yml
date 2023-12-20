@@ -1,8 +1,14 @@
 ---
+setup:
+  - skip:
+      version: "8.7.00 - 8.9.99"
+      reason: "Synthetic source shows up in the mapping in 8.10 and on, may trigger assert failures in mixed cluster tests"
+
+---
 add dimensions with put_mapping:
   - skip:
-      version: " - 8.00.99"
-      reason: _tsid support introduced in 8.1.0
+      version: " - 8.1.99"
+      reason: tsdb indexing changed in 8.2.0
 
   - do:
       indices.create:
@@ -54,8 +60,8 @@ add dimensions with put_mapping:
 ---
 add dimensions to no dims with dynamic_template over index:
   - skip:
-      version: " - 8.00.99"
-      reason: _tsid support introduced in 8.1.0
+      version: " - 8.1.99"
+      reason: tsdb indexing changed in 8.2.0
 
   - do:
       indices.create:
@@ -102,8 +108,8 @@ add dimensions to no dims with dynamic_template over index:
 ---
 add dimensions to no dims with dynamic_template over bulk:
   - skip:
-      version: " - 8.00.99"
-      reason: _tsid support introduced in 8.1.0
+      version: " - 8.1.99"
+      reason: tsdb indexing changed in 8.2.0
 
   - do:
       indices.create:
@@ -150,8 +156,8 @@ add dimensions to no dims with dynamic_template over bulk:
 ---
 add dimensions to some dims with dynamic_template over index:
   - skip:
-      version: " - 8.00.99"
-      reason: _tsid support introduced in 8.1.0
+      version: " - 8.1.99"
+      reason: tsdb indexing changed in 8.2.0
 
   - do:
       indices.create:
@@ -202,8 +208,8 @@ add dimensions to some dims with dynamic_template over index:
 ---
 add dimensions to some dims with dynamic_template over bulk:
   - skip:
-      version: " - 8.00.99"
-      reason: _tsid support introduced in 8.1.0
+      version: " - 8.1.99"
+      reason: tsdb indexing changed in 8.2.0
 
   - do:
       indices.create:

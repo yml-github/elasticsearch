@@ -19,6 +19,7 @@ import org.elasticsearch.action.search.SearchPhaseController.TopDocsStats;
 import org.elasticsearch.action.search.SearchResponse.Clusters;
 import org.elasticsearch.action.search.TransportSearchAction.SearchTimeProvider;
 import org.elasticsearch.common.lucene.search.TopDocsAndMaxScore;
+import org.elasticsearch.core.Releasable;
 import org.elasticsearch.index.shard.ShardId;
 import org.elasticsearch.lucene.grouping.TopFieldGroups;
 import org.elasticsearch.search.SearchHit;
@@ -31,6 +32,7 @@ import org.elasticsearch.search.profile.SearchProfileResults;
 import org.elasticsearch.search.profile.SearchProfileShardResult;
 import org.elasticsearch.search.suggest.Suggest;
 import org.elasticsearch.search.suggest.completion.CompletionSuggestion;
+import org.elasticsearch.transport.LeakTracker;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -64,13 +66,19 @@ import static org.elasticsearch.action.search.SearchPhaseController.mergeTopDocs
 // TODO it may make sense to integrate the remote clusters responses as a shard response in the initial search phase and ignore hits coming
 // from the remote clusters in the fetch phase. This would be identical to the removed QueryAndFetch strategy except that only the remote
 // cluster response would have the fetch results.
-final class SearchResponseMerger {
+final class SearchResponseMerger implements Releasable {
     final int from;
     final int size;
     final int trackTotalHitsUpTo;
     private final SearchTimeProvider searchTimeProvider;
     private final AggregationReduceContext.Builder aggReduceContextBuilder;
     private final List<SearchResponse> searchResponses = new CopyOnWriteArrayList<>();
+
+    private final Releasable releasable = LeakTracker.wrap(() -> {
+        for (SearchResponse searchResponse : searchResponses) {
+            searchResponse.decRef();
+        }
+    });
 
     SearchResponseMerger(
         int from,
@@ -83,7 +91,7 @@ final class SearchResponseMerger {
         this.size = size;
         this.trackTotalHitsUpTo = trackTotalHitsUpTo;
         this.searchTimeProvider = Objects.requireNonNull(searchTimeProvider);
-        this.aggReduceContextBuilder = Objects.requireNonNull(aggReduceContextBuilder);
+        this.aggReduceContextBuilder = aggReduceContextBuilder; // might be null if there are no aggregations
     }
 
     /**
@@ -93,6 +101,7 @@ final class SearchResponseMerger {
      */
     void add(SearchResponse searchResponse) {
         assert searchResponse.getScrollId() == null : "merging scroll results is not supported";
+        searchResponse.mustIncRef();
         searchResponses.add(searchResponse);
     }
 
@@ -135,7 +144,7 @@ final class SearchResponseMerger {
 
             profileResults.putAll(searchResponse.getProfileResults());
 
-            if (searchResponse.getAggregations() != null) {
+            if (searchResponse.hasAggregations()) {
                 InternalAggregations internalAggs = (InternalAggregations) searchResponse.getAggregations();
                 aggs.add(internalAggs);
             }
@@ -195,7 +204,9 @@ final class SearchResponseMerger {
         SearchHits mergedSearchHits = topDocsToSearchHits(topDocs, topDocsStats);
         setSuggestShardIndex(shards, groupedSuggestions);
         Suggest suggest = groupedSuggestions.isEmpty() ? null : new Suggest(Suggest.reduce(groupedSuggestions));
-        InternalAggregations reducedAggs = InternalAggregations.topLevelReduce(aggs, aggReduceContextBuilder.forFinalReduction());
+        InternalAggregations reducedAggs = aggs.isEmpty()
+            ? InternalAggregations.EMPTY
+            : InternalAggregations.topLevelReduce(aggs, aggReduceContextBuilder.forFinalReduction());
         ShardSearchFailure[] shardFailures = failures.toArray(ShardSearchFailure.EMPTY_ARRAY);
         SearchProfileResults profileShardResults = profileResults.isEmpty() ? null : new SearchProfileResults(profileResults);
         // make failures ordering consistent between ordinary search and CCS by looking at the shard they come from
@@ -258,14 +269,13 @@ final class SearchResponseMerger {
             return clusterAlias1.compareTo(clusterAlias2);
         }
 
-        private ShardId extractShardId(ShardSearchFailure failure) {
+        private static ShardId extractShardId(ShardSearchFailure failure) {
             SearchShardTarget shard = failure.shard();
             if (shard != null) {
                 return shard.getShardId();
             }
             Throwable cause = failure.getCause();
-            if (cause instanceof ElasticsearchException) {
-                ElasticsearchException e = (ElasticsearchException) cause;
+            if (cause instanceof ElasticsearchException e) {
                 return e.getShardId();
             }
             return null;
@@ -335,8 +345,7 @@ final class SearchResponseMerger {
         assignShardIndex(shards);
         for (List<Suggest.Suggestion<?>> suggestions : groupedSuggestions.values()) {
             for (Suggest.Suggestion<?> suggestion : suggestions) {
-                if (suggestion instanceof CompletionSuggestion) {
-                    CompletionSuggestion completionSuggestion = (CompletionSuggestion) suggestion;
+                if (suggestion instanceof CompletionSuggestion completionSuggestion) {
                     for (CompletionSuggestion.Entry options : completionSuggestion) {
                         for (CompletionSuggestion.Entry.Option option : options) {
                             SearchShardTarget shard = option.getHit().getShard();
@@ -375,13 +384,17 @@ final class SearchResponseMerger {
         Object[] groupValues = null;
         if (topDocs instanceof TopFieldDocs) {
             sortFields = ((TopFieldDocs) topDocs).fields;
-            if (topDocs instanceof TopFieldGroups) {
-                TopFieldGroups topFieldGroups = (TopFieldGroups) topDocs;
+            if (topDocs instanceof TopFieldGroups topFieldGroups) {
                 groupField = topFieldGroups.field;
                 groupValues = topFieldGroups.groupValues;
             }
         }
         return new SearchHits(searchHits, topDocsStats.getTotalHits(), topDocsStats.getMaxScore(), sortFields, groupField, groupValues);
+    }
+
+    @Override
+    public void close() {
+        releasable.close();
     }
 
     private static final class FieldDocAndSearchHit extends FieldDoc {
@@ -401,31 +414,9 @@ final class SearchResponseMerger {
      * make their ShardIds different, which is not the case if the index is really the same one from the same cluster, in which case we
      * need to look at the cluster alias and make sure to assign a different shardIndex based on that.
      */
-    private static final class ShardIdAndClusterAlias implements Comparable<ShardIdAndClusterAlias> {
-        private final ShardId shardId;
-        private final String clusterAlias;
-
-        ShardIdAndClusterAlias(ShardId shardId, String clusterAlias) {
-            this.shardId = shardId;
+    private record ShardIdAndClusterAlias(ShardId shardId, String clusterAlias) implements Comparable<ShardIdAndClusterAlias> {
+        private ShardIdAndClusterAlias {
             assert clusterAlias != null : "clusterAlias is null";
-            this.clusterAlias = clusterAlias;
-        }
-
-        @Override
-        public boolean equals(Object o) {
-            if (this == o) {
-                return true;
-            }
-            if (o == null || getClass() != o.getClass()) {
-                return false;
-            }
-            ShardIdAndClusterAlias that = (ShardIdAndClusterAlias) o;
-            return shardId.equals(that.shardId) && clusterAlias.equals(that.clusterAlias);
-        }
-
-        @Override
-        public int hashCode() {
-            return Objects.hash(shardId, clusterAlias);
         }
 
         @Override

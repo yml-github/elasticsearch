@@ -53,7 +53,7 @@ import static org.opensaml.saml.saml2.core.NameIDType.TRANSIENT;
  */
 public class SuccessfulAuthenticationResponseMessageBuilder {
 
-    private final Logger logger = LogManager.getLogger();
+    private static final Logger logger = LogManager.getLogger(SuccessfulAuthenticationResponseMessageBuilder.class);
 
     private final Clock clock;
     private final SamlIdentityProvider idp;
@@ -98,7 +98,7 @@ public class SuccessfulAuthenticationResponseMessageBuilder {
 
     private Response sign(Response response) {
         final SamlObjectSigner signer = new SamlObjectSigner(samlFactory, idp);
-        return samlFactory.buildXmlObject(signer.sign(response), Response.class);
+        return SamlFactory.buildXmlObject(signer.sign(response), Response.class);
     }
 
     private Conditions buildConditions(Instant now, SamlServiceProvider serviceProvider) {
@@ -157,7 +157,7 @@ public class SuccessfulAuthenticationResponseMessageBuilder {
         return statement;
     }
 
-    private String resolveAuthnClass(Set<AuthenticationMethod> authenticationMethods, Set<NetworkControl> networkControls) {
+    private static String resolveAuthnClass(Set<AuthenticationMethod> authenticationMethods, Set<NetworkControl> networkControls) {
         if (authenticationMethods.contains(AuthenticationMethod.PASSWORD)) {
             if (networkControls.contains(NetworkControl.IP_FILTER)) {
                 return AuthnContext.IP_PASSWORD_AUTHN_CTX;
@@ -262,12 +262,11 @@ public class SuccessfulAuthenticationResponseMessageBuilder {
     }
 
     private String getNameIdValueForFormat(String format, UserServiceAuthentication user) {
-        switch (format) {
-            case TRANSIENT:
+        return switch (format) {
+            case TRANSIENT ->
                 // See SAML 2.0 Core 8.3.8 & 1.3.4
-                return samlFactory.secureIdentifier();
-            default:
-                throw new IllegalStateException("Unsupported NameID Format: " + format);
-        }
+                samlFactory.secureIdentifier();
+            default -> throw new IllegalStateException("Unsupported NameID Format: " + format);
+        };
     }
 }

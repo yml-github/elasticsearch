@@ -16,6 +16,7 @@ import org.elasticsearch.common.settings.ClusterSettings;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.unit.ByteSizeUnit;
 import org.elasticsearch.core.Releasables;
+import org.elasticsearch.indices.breaker.CircuitBreakerMetrics;
 import org.elasticsearch.indices.breaker.HierarchyCircuitBreakerService;
 import org.elasticsearch.indices.breaker.NoneCircuitBreakerService;
 import org.elasticsearch.test.ESTestCase;
@@ -279,42 +280,42 @@ public class BigArraysTests extends ESTestCase {
         final ByteArray empty2 = byteArrayWithBytes(BytesRef.EMPTY_BYTES);
 
         // identity = equality
-        assertTrue(bigArrays.equals(empty1, empty1));
+        assertTrue(BigArrays.equals(empty1, empty1));
         // equality: both empty
-        assertTrue(bigArrays.equals(empty1, empty2));
+        assertTrue(BigArrays.equals(empty1, empty2));
         empty1.close();
         empty2.close();
 
         // not equal: contents differ
         final ByteArray a1 = byteArrayWithBytes(new byte[] { 0 });
         final ByteArray a2 = byteArrayWithBytes(new byte[] { 1 });
-        assertFalse(bigArrays.equals(a1, a2));
+        assertFalse(BigArrays.equals(a1, a2));
         a1.close();
         a2.close();
 
         // not equal: contents differ
         final ByteArray a3 = byteArrayWithBytes(new byte[] { 1, 2, 3 });
         final ByteArray a4 = byteArrayWithBytes(new byte[] { 1, 1, 3 });
-        assertFalse(bigArrays.equals(a3, a4));
+        assertFalse(BigArrays.equals(a3, a4));
         a3.close();
         a4.close();
 
         // not equal: contents differ
         final ByteArray a5 = byteArrayWithBytes(new byte[] { 1, 2, 3 });
         final ByteArray a6 = byteArrayWithBytes(new byte[] { 1, 2, 4 });
-        assertFalse(bigArrays.equals(a5, a6));
+        assertFalse(BigArrays.equals(a5, a6));
         a5.close();
         a6.close();
     }
 
     public void testByteArrayHashCode() {
         // null arg has hashCode 0
-        assertEquals(0, bigArrays.hashCode(null));
+        assertEquals(0, BigArrays.hashCode(null));
 
         // empty array should have equal hash
         final int emptyHash = Arrays.hashCode(BytesRef.EMPTY_BYTES);
         final ByteArray emptyByteArray = byteArrayWithBytes(BytesRef.EMPTY_BYTES);
-        final int emptyByteArrayHash = bigArrays.hashCode(emptyByteArray);
+        final int emptyByteArrayHash = BigArrays.hashCode(emptyByteArray);
         assertEquals(emptyHash, emptyByteArrayHash);
         emptyByteArray.close();
 
@@ -327,7 +328,7 @@ public class BigArraysTests extends ESTestCase {
         random().nextBytes(array1);
         final int array1Hash = Arrays.hashCode(array1);
         final ByteArray array2 = byteArrayWithBytes(array1);
-        final int array2Hash = bigArrays.hashCode(array2);
+        final int array2Hash = BigArrays.hashCode(array2);
         assertEquals(array1Hash, array2Hash);
         array2.close();
     }
@@ -359,6 +360,7 @@ public class BigArraysTests extends ESTestCase {
         for (String type : Arrays.asList("Byte", "Int", "Long", "Float", "Double", "Object")) {
             final int maxSize = randomIntBetween(1 << 8, 1 << 14);
             HierarchyCircuitBreakerService hcbs = new HierarchyCircuitBreakerService(
+                CircuitBreakerMetrics.NOOP,
                 Settings.builder()
                     .put(REQUEST_CIRCUIT_BREAKER_LIMIT_SETTING.getKey(), maxSize, ByteSizeUnit.BYTES)
                     .put(HierarchyCircuitBreakerService.USE_REAL_MEMORY_USAGE_SETTING.getKey(), false)
@@ -411,7 +413,14 @@ public class BigArraysTests extends ESTestCase {
      */
     public void testPreallocate() {
         ClusterSettings clusterSettings = new ClusterSettings(Settings.EMPTY, ClusterSettings.BUILT_IN_CLUSTER_SETTINGS);
-        try (HierarchyCircuitBreakerService realBreakers = new HierarchyCircuitBreakerService(Settings.EMPTY, List.of(), clusterSettings)) {
+        try (
+            HierarchyCircuitBreakerService realBreakers = new HierarchyCircuitBreakerService(
+                CircuitBreakerMetrics.NOOP,
+                Settings.EMPTY,
+                List.of(),
+                clusterSettings
+            )
+        ) {
             BigArrays unPreAllocated = new MockBigArrays(new MockPageCacheRecycler(Settings.EMPTY), realBreakers);
             long toPreallocate = randomLongBetween(4000, 10000);
             CircuitBreaker realBreaker = realBreakers.getBreaker(CircuitBreaker.REQUEST);
@@ -491,6 +500,7 @@ public class BigArraysTests extends ESTestCase {
 
     private BigArrays newBigArraysInstance(final long maxSize, final boolean withBreaking) {
         HierarchyCircuitBreakerService hcbs = new HierarchyCircuitBreakerService(
+            CircuitBreakerMetrics.NOOP,
             Settings.builder()
                 .put(REQUEST_CIRCUIT_BREAKER_LIMIT_SETTING.getKey(), maxSize, ByteSizeUnit.BYTES)
                 .put(HierarchyCircuitBreakerService.USE_REAL_MEMORY_USAGE_SETTING.getKey(), false)

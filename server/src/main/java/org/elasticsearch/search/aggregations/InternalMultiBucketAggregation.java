@@ -26,6 +26,18 @@ public abstract class InternalMultiBucketAggregation<
     A extends InternalMultiBucketAggregation,
     B extends InternalMultiBucketAggregation.InternalBucket> extends InternalAggregation implements MultiBucketsAggregation {
 
+    /**
+     * When we pre-count the empty buckets we report them periodically
+     * because you can configure the date_histogram to create an astounding
+     * number of buckets. It'd take a while to count that high only to abort.
+     * So we report every couple thousand buckets. It's be simpler to report
+     * every single bucket we plan to allocate one at a time but that'd cause
+     * needless overhead on the circuit breakers. Counting a couple thousand
+     * buckets is plenty fast to fail this quickly in pathological cases and
+     * plenty large to keep the overhead minimal.
+     */
+    protected static final int REPORT_EMPTY_EVERY = 10_000;
+
     public InternalMultiBucketAggregation(String name, Map<String, Object> metadata) {
         super(name, metadata);
     }
@@ -117,16 +129,14 @@ public abstract class InternalMultiBucketAggregation<
      */
     public static int countInnerBucket(Aggregation agg) {
         int size = 0;
-        if (agg instanceof MultiBucketsAggregation) {
-            MultiBucketsAggregation multi = (MultiBucketsAggregation) agg;
+        if (agg instanceof MultiBucketsAggregation multi) {
             for (MultiBucketsAggregation.Bucket bucket : multi.getBuckets()) {
                 ++size;
                 for (Aggregation bucketAgg : bucket.getAggregations().asList()) {
                     size += countInnerBucket(bucketAgg);
                 }
             }
-        } else if (agg instanceof SingleBucketAggregation) {
-            SingleBucketAggregation single = (SingleBucketAggregation) agg;
+        } else if (agg instanceof SingleBucketAggregation single) {
             for (Aggregation bucketAgg : single.getAggregations().asList()) {
                 size += countInnerBucket(bucketAgg);
             }

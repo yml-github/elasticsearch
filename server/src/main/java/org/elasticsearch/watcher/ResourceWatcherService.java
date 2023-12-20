@@ -15,7 +15,6 @@ import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.core.TimeValue;
 import org.elasticsearch.threadpool.Scheduler.Cancellable;
 import org.elasticsearch.threadpool.ThreadPool;
-import org.elasticsearch.threadpool.ThreadPool.Names;
 
 import java.io.Closeable;
 import java.io.IOException;
@@ -94,9 +93,10 @@ public class ResourceWatcherService implements Closeable {
         interval = RELOAD_INTERVAL_HIGH.get(settings);
         highMonitor = new ResourceMonitor(interval, Frequency.HIGH);
         if (enabled) {
-            lowFuture = threadPool.scheduleWithFixedDelay(lowMonitor, lowMonitor.interval, Names.SAME);
-            mediumFuture = threadPool.scheduleWithFixedDelay(mediumMonitor, mediumMonitor.interval, Names.SAME);
-            highFuture = threadPool.scheduleWithFixedDelay(highMonitor, highMonitor.interval, Names.SAME);
+            final var executor = threadPool.generic();
+            lowFuture = threadPool.scheduleWithFixedDelay(lowMonitor, lowMonitor.interval, executor);
+            mediumFuture = threadPool.scheduleWithFixedDelay(mediumMonitor, mediumMonitor.interval, executor);
+            highFuture = threadPool.scheduleWithFixedDelay(highMonitor, highMonitor.interval, executor);
         } else {
             lowFuture = null;
             mediumFuture = null;
@@ -125,31 +125,19 @@ public class ResourceWatcherService implements Closeable {
      */
     public <W extends ResourceWatcher> WatcherHandle<W> add(W watcher, Frequency frequency) throws IOException {
         watcher.init();
-        switch (frequency) {
-            case LOW:
-                return lowMonitor.add(watcher);
-            case MEDIUM:
-                return mediumMonitor.add(watcher);
-            case HIGH:
-                return highMonitor.add(watcher);
-            default:
-                throw new IllegalArgumentException("Unknown frequency [" + frequency + "]");
-        }
+        return switch (frequency) {
+            case LOW -> lowMonitor.add(watcher);
+            case MEDIUM -> mediumMonitor.add(watcher);
+            case HIGH -> highMonitor.add(watcher);
+        };
     }
 
     public void notifyNow(Frequency frequency) {
         switch (frequency) {
-            case LOW:
-                lowMonitor.run();
-                break;
-            case MEDIUM:
-                mediumMonitor.run();
-                break;
-            case HIGH:
-                highMonitor.run();
-                break;
-            default:
-                throw new IllegalArgumentException("Unknown frequency [" + frequency + "]");
+            case LOW -> lowMonitor.run();
+            case MEDIUM -> mediumMonitor.run();
+            case HIGH -> highMonitor.run();
+            default -> throw new IllegalArgumentException("Unknown frequency [" + frequency + "]");
         }
     }
 

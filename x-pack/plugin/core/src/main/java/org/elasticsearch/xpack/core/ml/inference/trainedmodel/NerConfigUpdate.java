@@ -7,6 +7,8 @@
 
 package org.elasticsearch.xpack.core.ml.inference.trainedmodel;
 
+import org.elasticsearch.TransportVersion;
+import org.elasticsearch.TransportVersions;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
 import org.elasticsearch.xcontent.ObjectParser;
@@ -144,6 +146,11 @@ public class NerConfigUpdate extends NlpConfigUpdate {
         return Objects.hash(resultsField, tokenizationUpdate);
     }
 
+    @Override
+    public TransportVersion getMinimalSupportedVersion() {
+        return TransportVersions.V_8_0_0;
+    }
+
     public static class Builder implements InferenceConfigUpdate.Builder<NerConfigUpdate.Builder, NerConfigUpdate> {
         private String resultsField;
         private TokenizationUpdate tokenizationUpdate;
@@ -159,6 +166,7 @@ public class NerConfigUpdate extends NlpConfigUpdate {
             return this;
         }
 
+        @Override
         public NerConfigUpdate build() {
             return new NerConfigUpdate(resultsField, tokenizationUpdate);
         }
